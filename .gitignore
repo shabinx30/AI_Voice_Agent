@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.venv/
+env/
+venv/
+ENV/
+
+# Testing & Linting
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Environment & Secrets
+.env
+*.local
+
+# Audio temporary files
+*.wav
+*.mp3
+*.ogg
+
+# Local model artifacts (exported NPU IRs, compiler cache)
+model_artifacts/
+
+# IDE
+.idea/
+.vscode/
+*.swp

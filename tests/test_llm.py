@@ -1,0 +1,127 @@
+"""Tests for LM Studio LLM client."""
+
+import asyncio
+from unittest.mock import AsyncMock, patch
+import httpx
+import pytest
+from app.core.llm import LMStudioClient
+
+
+def test_llm_client_initialization() -> None:
+    """Verifies LM Studio client attributes."""
+    async def _test() -> None:
+        client = LMStudioClient(
+            base_url="http://127.0.0.1:1234/v1",
+            model="qwen2.5-0.5b-instruct",
+        )
+        assert client.base_url == "http://127.0.0.1:1234/v1"
+        assert client.model == "qwen2.5-0.5b-instruct"
+        await client.close()
+
+    asyncio.run(_test())
+
+
+def test_llm_generate_response_mocked() -> None:
+    """Tests response parsing from LM Studio API."""
+    async def _test() -> None:
+        client = LMStudioClient()
+
+        mock_response = httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Hello, I am your voice assistant.",
+                        }
+                    }
+                ]
+            },
+            request=httpx.Request("POST", "http://127.0.0.1:1234/v1/chat/completions"),
+        )
+
+        with patch.object(
+            httpx.AsyncClient, "post", new_callable=AsyncMock
+        ) as mock_post:
+            mock_post.return_value = mock_response
+            reply = await client.generate_response("Hello")
+            assert reply == "Hello, I am your voice assistant."
+
+        await client.close()
+
+    asyncio.run(_test())
+
+
+def test_split_into_sentence_chunks_fullstops() -> None:
+    """Verifies splitting token stream into sentence chunks on fullstops and punctuation."""
+    async def _test() -> None:
+        from app.core.llm import split_into_sentence_chunks
+
+        async def token_gen():
+            tokens = ["Hello", " world", ".", " How", " are", " you", "?"]
+            for t in tokens:
+                yield t
+
+        chunks = [c async for c in split_into_sentence_chunks(token_gen())]
+        assert chunks == ["Hello world.", "How are you?"]
+
+    asyncio.run(_test())
+
+
+def test_split_into_sentence_chunks_newlines() -> None:
+    """Verifies splitting token stream into sentence chunks on newlines."""
+    async def _test() -> None:
+        from app.core.llm import split_into_sentence_chunks
+
+        async def token_gen():
+            tokens = ["First sentence.\n", "Second sentence.\n", "Third sentence."]
+            for t in tokens:
+                yield t
+
+        chunks = [c async for c in split_into_sentence_chunks(token_gen())]
+        assert chunks == ["First sentence.", "Second sentence.", "Third sentence."]
+
+    asyncio.run(_test())
+
+
+def test_split_into_sentence_chunks_protects_abbreviations_and_decimals() -> None:
+    """Verifies abbreviations and decimal numbers are not incorrectly split."""
+    async def _test() -> None:
+        from app.core.llm import split_into_sentence_chunks
+
+        async def token_gen():
+            tokens = [
+                "Dr", ". Smith", " purchased", " items", " for", " $3", ".50", ".",
+                " He", " was", " very", " pleased", "."
+            ]
+            for t in tokens:
+                yield t
+
+        chunks = [c async for c in split_into_sentence_chunks(token_gen())]
+        assert len(chunks) == 2
+        assert chunks[0] == "Dr. Smith purchased items for $3.50."
+        assert chunks[1] == "He was very pleased."
+
+    asyncio.run(_test())
+
+
+def test_llm_stream_sentence_chunks_mocked() -> None:
+    """Tests stream_sentence_chunks with a mocked stream_response generator."""
+    async def _test() -> None:
+        client = LMStudioClient()
+
+        async def fake_tokens(*args, **kwargs):
+            tokens = ["The weather", " is", " clear", " today", ".\n", "Enjoy", " your day", "!"]
+            for t in tokens:
+                yield t
+
+        client.stream_response = fake_tokens
+
+        sentences = [s async for s in client.stream_sentence_chunks("Tell me the weather")]
+        assert sentences == ["The weather is clear today.", "Enjoy your day!"]
+        await client.close()
+
+    asyncio.run(_test())
+
+

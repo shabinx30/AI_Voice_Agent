@@ -1,0 +1,635 @@
+"""REST API endpoints for the Personal Assistant service.
+
+Provides HTTP routes for speech-to-text transcription, LLM chat completion,
+text-to-speech synthesis, and complete end-to-end voice assistant interaction.
+"""
+
+import asyncio
+import base64
+import logging
+from typing import Any, Dict, List, Optional
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, Field
+
+from app.config import settings
+from app.core.audio import AudioProcessor
+from app.core.pipeline import AssistantPipeline, PipelineMetrics
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api", tags=["Assistant"])
+
+# Shared singleton pipeline (STT/TTS models loaded ONCE process-wide).
+# See app/core/shared.py: routes + websocket must share one instance to
+# avoid duplicate Whisper/Kokoro models in 16 GB RAM.
+from app.core.shared import get_pipeline
+
+pipeline = get_pipeline()
+
+
+# ============================================================================
+# Pydantic Schemas
+# ============================================================================
+
+
+class HealthResponse(BaseModel):
+    """Health check response schema."""
+
+    status: str
+    stt_model: str
+    stt_device: str
+    openvino_devices: List[str]
+    lm_studio_connected: bool
+    lm_studio_model: str
+    tts_model: str
+    tts_speakers: List[str]
+
+
+class TranscribeResponse(BaseModel):
+    """Transcription response schema."""
+
+    transcription: str
+    duration_seconds: Optional[float] = None
+
+
+class ChatRequest(BaseModel):
+    """Chat completion request schema."""
+
+    message: str = Field(..., min_length=1, description="User prompt text")
+    system_prompt: Optional[str] = Field(None, description="Optional system prompt")
+    history: Optional[List[Dict[str, str]]] = Field(
+        None, description="Chat history"
+    )
+    session_id: str = Field(default="default", description="Session key for history isolation")
+
+
+class ChatResponse(BaseModel):
+    """Chat completion response schema."""
+
+    response: str
+    model: str
+
+
+class TTSRequest(BaseModel):
+    """Text-to-speech request schema."""
+
+    text: str = Field(..., min_length=1, description="Text to synthesize")
+    speaker: Optional[str] = Field(None, description="Voice persona")
+    language: Optional[str] = Field(None, description="Spoken language")
+
+
+class InteractResponse(BaseModel):
+    """Full assistant loop response schema."""
+
+    user_text: str
+    assistant_text: str
+    audio_base64: str
+    sample_rate: int
+    metrics: Dict[str, float]
+
+
+class RecordRequest(BaseModel):
+    """Microphone record request schema."""
+
+    duration_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
+    speaker: Optional[str] = None
+    language: Optional[str] = None
+    play_audio: bool = False
+    session_id: str = "default"
+
+
+def _metrics_dict(metrics) -> Dict[str, float]:
+    base = {
+        "stt_ms": metrics.stt_latency_ms,
+        "llm_ms": metrics.llm_latency_ms,
+        "tts_ms": metrics.tts_latency_ms,
+        "tts_synth_ms": getattr(metrics, "tts_synth_ms", 0.0),
+        "ttfa_ms": metrics.ttfa_ms,
+        "total_ms": metrics.total_latency_ms,
+    }
+    # Detailed T0..T8 + throughput/resource telemetry (best-effort).
+    for attr, key in (
+        ("llm_ttft_ms", "llm_ttft_ms"),
+        ("sentence_latency_ms", "sentence_latency_ms"),
+        ("voice_latency_ms", "voice_latency_ms"),
+        ("tokens_per_sec", "tokens_per_sec"),
+        ("tts_realtime_factor", "tts_realtime_factor"),
+        ("audio_queue_depth", "audio_queue_depth"),
+        ("system_ram_mb", "system_ram_mb"),
+        ("cpu_pct", "cpu_pct"),
+        ("gpu_util_pct", "gpu_util_pct"),
+        ("gpu_vram_mb", "gpu_vram_mb"),
+        ("npu_status", "npu_status"),
+    ):
+        try:
+            base[key] = getattr(metrics, attr)
+        except Exception:
+            pass
+    return base
+
+
+# ============================================================================
+# API Endpoints
+# ============================================================================
+
+
+@router.get("/health", response_model=HealthResponse)
+async def get_health() -> HealthResponse:
+    """Returns the operational status of all assistant subsystems."""
+    lm_status = await pipeline.llm.check_health()
+    devices = pipeline.stt.get_openvino_devices()
+    speakers = pipeline.tts.get_supported_speakers()
+
+    return HealthResponse(
+        status="healthy",
+        stt_model=pipeline.stt.model_id,
+        stt_device=pipeline.stt.device,
+        openvino_devices=devices,
+        lm_studio_connected=lm_status,
+        lm_studio_model=pipeline.llm.model,
+        tts_model=pipeline.tts.model_id,
+        tts_speakers=speakers,
+    )
+
+
+@router.get("/devices")
+async def get_devices() -> Dict[str, Any]:
+    """Lists available OpenVINO hardware and audio input/output devices."""
+    return {
+        "openvino_devices": pipeline.stt.get_openvino_devices(),
+        "audio_devices": AudioProcessor.get_audio_devices(),
+    }
+
+
+@router.get("/speakers")
+async def get_speakers() -> Dict[str, List[str]]:
+    """Returns the supported voice personas and languages for Kokoro-82M TTS."""
+    return {
+        "speakers": pipeline.tts.get_supported_speakers(),
+        "languages": pipeline.tts.get_supported_languages(),
+    }
+
+
+@router.post("/transcribe", response_model=TranscribeResponse)
+async def transcribe_audio(
+    file: UploadFile = File(..., description="Audio file to transcribe"),
+) -> TranscribeResponse:
+    """Transcribes an uploaded audio file using OpenVINO Whisper Base INT8.
+
+    Args:
+        file: Multipart audio file upload.
+
+    Returns:
+        TranscribeResponse containing the transcribed text.
+    """
+    try:
+        content = await file.read()
+        audio_array, sr = AudioProcessor.load_from_bytes(
+            content, target_sr=16000
+        )
+        duration = len(audio_array) / sr
+        text = await asyncio.to_thread(
+            pipeline.stt.transcribe, audio_array, sample_rate=sr
+        )
+        return TranscribeResponse(transcription=text, duration_seconds=round(duration, 2))
+    except Exception as exc:
+        logger.error("API transcribe error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Transcription failed: {exc}",
+        ) from exc
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat_completion(request: ChatRequest) -> ChatResponse:
+    """Sends a conversational prompt to the LM Studio LLM.
+
+    Args:
+        request: Chat message request payload.
+
+    Returns:
+        ChatResponse containing the generated assistant response.
+    """
+    try:
+        # Maintain multi-turn conversational context if history not explicitly passed.
+        # Uses per-session isolated history to avoid cross-talk between clients.
+        if request.history is not None:
+            history = request.history
+        else:
+            history = await pipeline._get_history_slice(request.session_id)
+        response_text = await pipeline.llm.generate_response(
+            prompt=request.message,
+            system_prompt=request.system_prompt,
+            history=history,
+        )
+
+        # Update per-session history (bounded).
+        await pipeline._append_history(request.session_id, request.message, response_text)
+
+        return ChatResponse(response=response_text, model=pipeline.llm.model)
+    except Exception as exc:
+        logger.error("API chat error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"LLM generation failed: {exc}",
+        ) from exc
+
+
+@router.post("/chat/stream")
+async def chat_streaming(request: ChatRequest) -> StreamingResponse:
+    """Streams sentence chunks from LM Studio LLM using Server-Sent Events (SSE).
+
+    Args:
+        request: Chat message request payload.
+
+    Returns:
+        SSE text/event-stream yielding sentence chunks as they complete.
+    """
+    if request.history is not None:
+        history = request.history
+    else:
+        history = await pipeline._get_history_slice(request.session_id)
+
+    async def _event_generator():
+        import json
+
+        full_reply_parts = []
+        try:
+            chunk_idx = 0
+            async for sentence in pipeline.llm.stream_sentence_chunks(
+                prompt=request.message,
+                system_prompt=request.system_prompt,
+                history=history,
+            ):
+                full_reply_parts.append(sentence)
+                payload = json.dumps({"index": chunk_idx, "sentence": sentence})
+                yield f"data: {payload}\n\n"
+                chunk_idx += 1
+
+            # Update per-session history on completion
+            complete_text = " ".join(full_reply_parts).strip()
+            await pipeline._append_history(
+                request.session_id, request.message, complete_text
+            )
+            yield "data: [DONE]\n\n"
+        except Exception as exc:
+            logger.error("SSE stream error: %s", exc)
+            err_data = json.dumps({"error": str(exc)})
+            yield f"data: {err_data}\n\n"
+
+    return StreamingResponse(_event_generator(), media_type="text/event-stream")
+
+
+@router.post("/chat/tokens")
+async def chat_token_stream(request: ChatRequest) -> StreamingResponse:
+    """Streams raw LLM token deltas for word-by-word text display.
+
+    Emits one SSE ``token`` event per generated token as it arrives from
+    LM Studio, ending with ``[DONE]``. On successful completion the full
+    reply is appended to the session history, mirroring ``/api/chat``.
+
+    Args:
+        request: Chat message request payload.
+
+    Returns:
+        SSE text/event-stream yielding token deltas.
+    """
+    if request.history is not None:
+        history = request.history
+    else:
+        history = await pipeline._get_history_slice(request.session_id)
+
+    async def _event_generator():
+        import json
+
+        full_reply_parts = []
+        try:
+            async for token in pipeline.llm.stream_response(
+                prompt=request.message,
+                system_prompt=request.system_prompt,
+                history=history,
+            ):
+                if not token:
+                    continue
+                full_reply_parts.append(token)
+                payload = json.dumps({"token": token})
+                yield f"data: {payload}\n\n"
+            complete_text = "".join(full_reply_parts)
+            await pipeline._append_history(
+                request.session_id, request.message, complete_text
+            )
+            yield "data: [DONE]\n\n"
+        except Exception as exc:
+            logger.error("Token SSE stream error: %s", exc)
+            err_data = json.dumps({"error": str(exc)})
+            yield f"data: {err_data}\n\n"
+
+    return StreamingResponse(_event_generator(), media_type="text/event-stream")
+
+
+@router.post("/tts")
+async def synthesize_speech(request: TTSRequest) -> Response:
+    """Synthesizes text into speech using Kokoro-82M and streams the WAV audio.
+
+    Args:
+        request: Text to synthesize and optional speaker voice.
+
+    Returns:
+        Streaming WAV audio file response.
+    """
+    try:
+        wav_bytes = await asyncio.to_thread(
+            pipeline.tts.synthesize_to_wav_bytes,
+            text=request.text,
+            speaker=request.speaker,
+            language=request.language,
+        )
+        return Response(content=wav_bytes, media_type="audio/wav")
+    except Exception as exc:
+        logger.error("API TTS error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Speech synthesis failed: {exc}",
+        ) from exc
+
+
+@router.post("/interact", response_model=InteractResponse)
+async def interact_voice(
+    file: UploadFile = File(..., description="Voice recording audio file"),
+    speaker: Optional[str] = Form(None),
+    language: Optional[str] = Form(None),
+    play_audio: bool = Form(False),
+    session_id: str = Form("default"),
+) -> InteractResponse:
+    """Full assistant flow: Audio in -> OpenVINO STT -> LM Studio LLM -> Kokoro-82M TTS.
+
+    Args:
+        file: Uploaded audio recording from user.
+        speaker: Voice persona name.
+        language: Language identifier.
+        play_audio: Whether the server should output audio to its speakers.
+        session_id: Session key for history isolation.
+
+    Returns:
+        InteractResponse with transcription, bot reply, audio, and metrics.
+    """
+    try:
+        audio_bytes = await file.read()
+        res = await pipeline.process_audio_bytes(
+            audio_bytes=audio_bytes,
+            speaker=speaker,
+            language=language,
+            play_audio=play_audio,
+            session_id=session_id,
+        )
+        b64_audio = base64.b64encode(res.audio_bytes).decode("utf-8")
+
+        return InteractResponse(
+            user_text=res.user_text,
+            assistant_text=res.assistant_text,
+            audio_base64=b64_audio,
+            sample_rate=res.sample_rate,
+            metrics=_metrics_dict(res.metrics),
+        )
+    except Exception as exc:
+        logger.error("API interact error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Interaction cycle failed: {exc}",
+        ) from exc
+
+
+@router.post("/interact/stream")
+async def interact_voice_stream(
+    file: UploadFile = File(..., description="Voice recording audio file"),
+    speaker: Optional[str] = Form(None),
+    language: Optional[str] = Form(None),
+    play_audio: bool = Form(False),
+    session_id: str = Form("default"),
+) -> StreamingResponse:
+    """Streams voice assistant interaction: STT -> LLM tokens -> sentence audio chunks over SSE.
+
+    Args:
+        file: Uploaded audio file.
+        speaker: Voice persona name.
+        language: Synthesis language.
+        play_audio: Whether to play output audio on host device speakers.
+        session_id: Session key for history isolation.
+
+    Returns:
+        SSE text/event-stream delivering transcription, sentence audio chunks, and result frame.
+    """
+    import json
+
+    audio_bytes = await file.read()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=32)
+
+    async def _on_transcription(user_text: str):
+        await queue.put({"type": "transcription", "user_text": user_text})
+
+    async def _on_chunk(chunk):
+        await queue.put(
+            {
+                "type": "chunk",
+                "index": chunk.sentence_index,
+                "text": chunk.text,
+                "audio_base64": base64.b64encode(chunk.audio_bytes).decode("utf-8"),
+                "sample_rate": chunk.sample_rate,
+            }
+        )
+
+    async def _on_token(token_text):
+        await queue.put({"type": "token", "text": token_text})
+
+    async def _runner():
+        try:
+            res = await pipeline.process_audio_bytes(
+                audio_bytes=audio_bytes,
+                speaker=speaker,
+                language=language,
+                play_audio=play_audio,
+                on_chunk=_on_chunk,
+                on_token=_on_token,
+                on_transcription=_on_transcription,
+                session_id=session_id,
+            )
+            await queue.put(
+                {
+                    "type": "result",
+                    "user_text": res.user_text,
+                    "assistant_text": res.assistant_text,
+                    "audio_base64": base64.b64encode(res.audio_bytes).decode("utf-8"),
+                    "sample_rate": res.sample_rate,
+                    "metrics": _metrics_dict(res.metrics),
+                }
+            )
+        except Exception as exc:
+            logger.error("API interact stream error: %s", exc)
+            await queue.put({"type": "error", "message": str(exc)})
+        finally:
+            await queue.put(None)
+
+    async def _event_stream():
+        task = asyncio.create_task(_runner())
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                payload = json.dumps(item)
+                yield f"data: {payload}\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            await task
+
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+
+
+@router.post("/record", response_model=InteractResponse)
+async def record_from_microphone(request: RecordRequest) -> InteractResponse:
+    """Captures microphone audio on the server host and runs the assistant loop.
+
+    Args:
+        request: Recording parameters (duration, speaker, play_audio).
+
+    Returns:
+        InteractResponse with the results of the voice loop.
+    """
+    try:
+        recorded_audio = await asyncio.to_thread(
+            AudioProcessor.record_microphone,
+            request.duration_seconds,
+            16000,
+        )
+        wav_bytes = AudioProcessor.to_wav_bytes(recorded_audio, 16000)
+
+        res = await pipeline.process_audio_bytes(
+            audio_bytes=wav_bytes,
+            speaker=request.speaker,
+            language=request.language,
+            play_audio=request.play_audio,
+            session_id=request.session_id,
+        )
+        b64_audio = base64.b64encode(res.audio_bytes).decode("utf-8")
+
+        return InteractResponse(
+            user_text=res.user_text,
+            assistant_text=res.assistant_text,
+            audio_base64=b64_audio,
+            sample_rate=res.sample_rate,
+            metrics=_metrics_dict(res.metrics),
+        )
+    except Exception as exc:
+        logger.error("API record error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Microphone interaction failed: {exc}",
+        ) from exc
+
+
+class InterruptRequest(BaseModel):
+    """User-interruption request schema."""
+
+    session_id: str = Field(default="default", description="Session to interrupt")
+
+
+@router.post("/interrupt")
+async def interrupt_session(request: InterruptRequest) -> Dict[str, Any]:
+    """Immediately stops LLM/TTS/playback for a session (barge-in).
+
+    Stops pending TTS jobs, clears the audio queue, and aborts the in-flight
+    LLM stream so a new user utterance can start without hearing stale audio.
+
+    Args:
+        request: Session key to interrupt.
+
+    Returns:
+        Dict with interruption acknowledgement.
+    """
+    try:
+        pipeline.cancel(request.session_id)
+        return {"interrupted": True, "session_id": request.session_id}
+    except Exception as exc:
+        logger.error("API interrupt error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Interrupt failed: {exc}",
+        ) from exc
+
+
+@router.get("/diagnostics")
+async def get_diagnostics() -> Dict[str, Any]:
+    """Returns runtime-confirmed OpenVINO/Kokoro device diagnostics.
+
+    Reports available devices, OpenVINO version, Kokoro requested vs
+    effective (compiled) device, per-stage NPU placement, and NPU plugin
+    state. Never claims NPU execution unless the runtime confirms it.
+    """
+    try:
+        from app.core.diagnostics import (
+            get_device_details,
+            get_kokoro_device_report,
+            get_openvino_version,
+        )
+
+        kokoro = get_kokoro_device_report(pipeline.tts)
+        return {
+            "openvino_version": get_openvino_version(),
+            "openvino_devices": kokoro.get("available_devices", []),
+            "device_details": get_device_details(),
+            "kokoro": kokoro,
+            "stt_device": pipeline.stt.device,
+            "stt_model": pipeline.stt.model_id,
+        }
+    except Exception as exc:
+        logger.error("Diagnostics error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Diagnostics failed: {exc}",
+        ) from exc
+
+
+class BenchmarkRequest(BaseModel):
+    """Kokoro benchmark request schema."""
+
+    text: str = Field(
+        default="Hello there, how are you today? This is a fixed benchmark sentence for measuring Kokoro speech synthesis speed.",
+        description="Fixed text synthesized on each device",
+    )
+    devices: Optional[List[str]] = Field(
+        default=None, description="Subset of [CPU, GPU, NPU] to benchmark"
+    )
+    warmup_iters: int = Field(default=2, ge=1, le=10)
+    measure_iters: int = Field(default=3, ge=1, le=10)
+    include_turbo_comparison: bool = Field(
+        default=True, description="Benchmark NPU_TURBO off vs on when supported"
+    )
+
+
+@router.post("/benchmark/kokoro")
+async def benchmark_kokoro_endpoint(request: BenchmarkRequest) -> Dict[str, Any]:
+    """Benchmarks Kokoro TTS across CPU/GPU/NPU with the same fixed text.
+
+    Steady-state generation excludes model init (warm-up iters run first).
+    Reports compile time, warm-up, generation mean/p50, audio duration, and
+    RTFx (audio_s / gen_s) per device, plus NPU turbo off vs on rows.
+    """
+    try:
+        from app.core.benchmark import benchmark_all_devices, results_to_dicts
+
+        results = await asyncio.to_thread(
+            benchmark_all_devices,
+            request.text,
+            request.devices,
+            request.warmup_iters,
+            request.measure_iters,
+            request.include_turbo_comparison,
+        )
+        return {"results": results_to_dicts(results)}
+    except Exception as exc:
+        logger.error("Kokoro benchmark error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Benchmark failed: {exc}",
+        ) from exc
