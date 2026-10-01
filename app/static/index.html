@@ -74,15 +74,16 @@
             </div>
           </div>
 
-          <!-- Qwen TTS Card -->
+          <!-- Kokoro TTS Card -->
           <div class="subsystem-card" id="card-tts">
             <div class="subsystem-header">
               <span class="status-indicator online" id="tts-dot"></span>
               <span class="subsystem-name">Kokoro-82M TTS</span>
+              <span class="badge-subtle" id="tts-unit-header-badge">CPU</span>
             </div>
             <div class="subsystem-model" id="tts-model-name">Kokoro-82M</div>
             <div class="subsystem-meta">
-              <span>Sample Rate:</span> <strong>24,000 Hz</strong>
+              <span>Processing Unit:</span> <strong id="tts-device-name">Host CPU</strong>
             </div>
           </div>
         </div>
@@ -133,6 +134,23 @@
               <option value="bm_george">George (British Male)</option>
               <option value="bm_daniel">Daniel (British Male)</option>
             </select>
+          </div>
+
+          <div class="control-group">
+            <div class="label-row">
+              <label>TTS Processing Unit</label>
+              <span id="tts-unit-badge" class="badge-subtle">CPU</span>
+            </div>
+            <div class="segmented-control" id="tts-unit-segmented">
+              <button type="button" class="segmented-btn active" data-unit="cpu" id="static-tts-cpu-btn">
+                <span>CPU</span>
+                <small>Host Cores</small>
+              </button>
+              <button type="button" class="segmented-btn" data-unit="npu" id="static-tts-npu-btn">
+                <span>NPU</span>
+                <small>Intel AI Boost</small>
+              </button>
+            </div>
           </div>
 
           <div

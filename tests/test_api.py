@@ -16,6 +16,11 @@ def test_health_endpoint() -> None:
     assert "OpenVINO" in data["stt_model"]
     assert "Kokoro" in data["tts_model"]
     assert isinstance(data["tts_speakers"], list)
+    assert "tts_device" in data
+    assert "tts_effective_device" in data
+    assert "tts_available_devices" in data
+    assert "cpu" in data["tts_available_devices"]
+    assert "npu" in data["tts_available_devices"]
 
 
 def test_devices_endpoint() -> None:
@@ -306,5 +311,89 @@ def test_select_model_endpoint() -> None:
         assert data["status"] == "success"
         assert data["model"] == "qwen2.5-3b-instruct"
         assert data["loaded"] is True
+
+
+def test_get_tts_device_endpoint() -> None:
+    """Tests GET /api/tts/device returns device information."""
+    response = client.get("/api/tts/device")
+    assert response.status_code == 200
+    data = response.json()
+    assert "device" in data
+    assert "effective_device" in data
+    assert "backend" in data
+    assert "available_devices" in data
+    assert "cpu" in data["available_devices"]
+    assert "npu" in data["available_devices"]
+
+
+def test_set_tts_device_endpoint() -> None:
+    """Tests POST /api/tts/device updates active processing unit."""
+    from unittest.mock import patch
+    from app.api import routes
+
+    mock_resp = {
+        "status": "success",
+        "device": "npu",
+        "effective_device": "npu",
+        "backend": "openvino",
+        "message": "TTS device set to npu (effective: npu)",
+    }
+
+    with patch.object(routes.pipeline, "set_tts_device", return_value=mock_resp):
+        response = client.post("/api/tts/device", json={"device": "npu"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["device"] == "npu"
+        assert data["effective_device"] == "npu"
+
+
+def test_set_tts_device_invalid_device() -> None:
+    """Tests POST /api/tts/device returns 400 for unsupported hardware device."""
+    response = client.post("/api/tts/device", json={"device": "invalid_accelerator"})
+    assert response.status_code == 400
+    data = response.json()
+    assert "Unsupported TTS device" in data["detail"]
+
+
+
+def test_websocket_tts_device_handling() -> None:
+    """Tests /ws/assistant get_tts_device and set_tts_device operations."""
+    from unittest.mock import patch
+    from app.api.websocket import ws_pipeline
+
+    mock_info = {
+        "device": "cpu",
+        "effective_device": "cpu",
+        "backend": "openvino",
+        "available_devices": ["cpu", "npu"],
+    }
+    mock_set_res = {
+        "status": "success",
+        "device": "npu",
+        "effective_device": "npu",
+        "backend": "openvino",
+        "message": "TTS device set to npu",
+    }
+
+    with patch.object(
+        ws_pipeline, "get_tts_device", return_value=mock_info
+    ), patch.object(
+        ws_pipeline, "set_tts_device", return_value=mock_set_res
+    ):
+        with client.websocket_connect("/ws/assistant") as websocket:
+            # Query device
+            websocket.send_json({"type": "get_tts_device"})
+            resp1 = websocket.receive_json()
+            assert resp1["type"] == "tts_device"
+            assert resp1["device"] == "cpu"
+            assert "available_devices" in resp1
+
+            # Switch device
+            websocket.send_json({"type": "set_tts_device", "device": "npu"})
+            resp2 = websocket.receive_json()
+            assert resp2["type"] == "tts_device_changed"
+            assert resp2["device"] == "npu"
+
 
 

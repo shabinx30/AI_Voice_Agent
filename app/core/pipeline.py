@@ -236,6 +236,21 @@ class AssistantPipeline:
         """Ejects a model or all models from LM Studio memory."""
         return await self.llm.eject_model(model_id)
 
+    def set_tts_device(self, device: str) -> Dict[str, Any]:
+        """Switches the Kokoro TTS compute processing unit (cpu or npu).
+
+        Args:
+            device: Target processing unit ('cpu' or 'npu').
+
+        Returns:
+            Dictionary describing the active device status.
+        """
+        return self.tts.set_device(device)
+
+    def get_tts_device(self) -> Dict[str, Any]:
+        """Returns the active Kokoro TTS compute processing unit details."""
+        return self.tts.get_device_info()
+
     def warmup(self, warm_npu: Optional[bool] = None) -> None:
         """Pre-loads and compiles OpenVINO and TTS models for fast first response.
 
@@ -684,6 +699,7 @@ class AssistantPipeline:
         on_token: Optional[Callable[[str], Any]] = None,
         on_transcription: Optional[Callable[[str], Any]] = None,
         session_id: str = "default",
+        tts_device: Optional[str] = None,
     ) -> AssistantResponse:
         """Executes the complete voice assistant loop from raw audio bytes.
 
@@ -705,10 +721,17 @@ class AssistantPipeline:
                 arrives (drives word-by-word text display in clients).
             on_transcription: Optional callback invoked when STT finishes transcribing.
             session_id: Session key isolating conversation history/playback.
+            tts_device: Optional compute processing unit override for Kokoro TTS ('cpu' or 'npu').
 
         Returns:
             AssistantResponse containing user text, assistant text, audio bytes, and metrics.
         """
+        if tts_device is not None and str(tts_device).strip().lower() != str(self.tts.device).lower():
+            try:
+                self.set_tts_device(tts_device)
+            except Exception as d_exc:
+                logger.warning("Could not set TTS device '%s': %s", tts_device, d_exc)
+
         pipeline_start = time.perf_counter()
         t0_mic_end = pipeline_start  # T0 = user audio bytes ready
         t1_stt_start = 0.0  # T1 set below; T2 = Whisper done

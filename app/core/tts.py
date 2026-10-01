@@ -23,7 +23,7 @@ import logging
 import time
 from collections import OrderedDict
 from threading import Lock, RLock
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import soundfile as sf
 import torch
@@ -272,6 +272,74 @@ class KokoroTTSEngine:
                 "error": str(exc)[:200],
             }
 
+    def get_device_info(self) -> Dict[str, Any]:
+        """Returns the current requested and effective Kokoro TTS device info."""
+        from app.core.diagnostics import get_available_devices
+
+        available_devices = ["cpu"]
+        if "NPU" in get_available_devices():
+            available_devices.append("npu")
+
+        return {
+            "device": str(self.device).lower(),
+            "effective_device": self.effective_device or ("CPU" if str(self.device).lower() == "cpu" else "NPU"),
+            "backend": self.backend,
+            "available_devices": available_devices,
+        }
+
+    def set_device(self, device: str) -> Dict[str, Any]:
+        """Dynamically switches the Kokoro TTS execution device (cpu or npu).
+
+        Args:
+            device: Target processing unit ('cpu' or 'npu', case-insensitive).
+
+        Returns:
+            Dict describing the active device status.
+
+        Raises:
+            ValueError: If an unsupported device is specified.
+        """
+        target = str(device or "").strip().lower()
+        if target not in ("cpu", "npu"):
+            raise ValueError(f"Unsupported TTS device '{device}'. Choose 'cpu' or 'npu'.")
+
+        if target == str(self.device).lower() and self._is_loaded:
+            return self.get_device_info()
+
+        logger.info("Switching Kokoro TTS processing unit from '%s' to '%s'...", self.device, target)
+        self.device = target
+        settings.tts_device = target
+
+        if target == "npu":
+            self.backend = "openvino"
+            if not self._is_loaded or self._ov_model is None:
+                self.load_model()
+            if self._npu_encoder is None:
+                self._npu_attempted = False
+                try:
+                    self._get_npu_encoder()
+                except Exception as exc:
+                    logger.warning("Failed to initialize NPU encoder during set_device: %s", exc)
+            if self._npu_encoder and self._npu_encoder.npu_stage_count > 0:
+                self.effective_device = "NPU+CPU"
+            else:
+                self.effective_device = "CPU"
+        else:
+            self.effective_device = "CPU"
+            if self.backend == "openvino":
+                if not self._is_loaded or self._ov_model is None:
+                    self.load_model()
+            elif not self._is_loaded or self._pipeline is None:
+                self.load_model()
+
+        logger.info(
+            "Kokoro TTS processing unit switched to '%s' (effective: %s, backend: %s).",
+            self.device,
+            self.effective_device,
+            self.backend,
+        )
+        return self.get_device_info()
+
     def _get_npu_encoder(self):
         """Returns the static NPU encoder, initializing it lazily on first use.
 
@@ -285,11 +353,11 @@ class KokoroTTSEngine:
         """
         if self._npu_encoder is not None:
             return self._npu_encoder
+        if str(self.device or "cpu").upper() != "NPU":
+            return None
         if self._npu_attempted:
             return None
         self._npu_attempted = True
-        if str(self.device or "cpu").upper() != "NPU":
-            return None
         try:
             from app.core.tts_npu import KokoroNPUEncoder
 
@@ -609,6 +677,7 @@ class KokoroTTSEngine:
         text: str,
         speaker: Optional[str] = None,
         language: Optional[str] = None,
+        device: Optional[str] = None,
     ) -> Tuple[np.ndarray, int]:
         """Synthesizes text into audio waveform samples using Kokoro-82M.
 
@@ -616,6 +685,7 @@ class KokoroTTSEngine:
             text: Text to convert to speech.
             speaker: Voice persona name. Defaults to instance default.
             language: Spoken language code. Defaults to instance default.
+            device: Optional compute device override ('cpu' or 'npu').
 
         Returns:
             Tuple of (audio_waveform_numpy_array, sample_rate_hz).
@@ -624,6 +694,9 @@ class KokoroTTSEngine:
             ValueError: If input text is empty.
             RuntimeError: If audio synthesis fails.
         """
+        if device is not None and str(device).strip().lower() != str(self.device).lower():
+            self.set_device(device)
+
         clean_text = text.strip()
         if not clean_text:
             raise ValueError("Input text for TTS cannot be empty.")
@@ -753,6 +826,7 @@ class KokoroTTSEngine:
         text: str,
         speaker: Optional[str] = None,
         language: Optional[str] = None,
+        device: Optional[str] = None,
     ) -> bytes:
         """Synthesizes speech and returns encoded WAV file bytes.
 
@@ -760,11 +834,14 @@ class KokoroTTSEngine:
             text: Text to convert into speech.
             speaker: Voice persona name.
             language: Spoken language code.
+            device: Optional compute device override ('cpu' or 'npu').
 
         Returns:
             WAV format binary bytes.
         """
-        audio_data, sr = self.synthesize(text, speaker=speaker, language=language)
+        audio_data, sr = self.synthesize(
+            text, speaker=speaker, language=language, device=device
+        )
         buffer = io.BytesIO()
         sf.write(buffer, audio_data, sr, format="WAV")
         return buffer.getvalue()

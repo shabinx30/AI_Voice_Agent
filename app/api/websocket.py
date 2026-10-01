@@ -139,11 +139,49 @@ async def websocket_assistant_endpoint(websocket: WebSocket) -> None:
                     await websocket.send_json({"type": "error", "message": f"Could not switch model: {exc}"})
                 continue
 
+            if msg_type == "get_tts_device":
+                try:
+                    info = ws_pipeline.get_tts_device()
+                    await websocket.send_json({
+                        "type": "tts_device",
+                        "device": info["device"],
+                        "effective_device": info.get("effective_device"),
+                        "available_devices": info.get("available_devices", ["cpu", "npu"]),
+                    })
+                except Exception as exc:
+                    await websocket.send_json({"type": "error", "message": f"Could not get TTS device: {exc}"})
+                continue
+
+            if msg_type == "set_tts_device":
+                new_device = data.get("device")
+                if not new_device:
+                    await websocket.send_json({"type": "error", "message": "Missing device field."})
+                    continue
+                try:
+                    info = ws_pipeline.set_tts_device(new_device)
+                    await websocket.send_json({
+                        "type": "tts_device_changed",
+                        "status": "success",
+                        "device": info["device"],
+                        "effective_device": info.get("effective_device"),
+                        "available_devices": info.get("available_devices", ["cpu", "npu"]),
+                        "message": f"Kokoro TTS processing unit set to {info['device'].upper()} ({info.get('effective_device', info['device'].upper())})",
+                    })
+                except Exception as exc:
+                    await websocket.send_json({"type": "error", "message": f"Could not set TTS device: {exc}"})
+                continue
+
             if msg_type == "audio":
                 req_model = data.get("model")
                 if req_model and req_model != ws_pipeline.llm.model:
                     try:
                         await ws_pipeline.set_model(req_model, load=False)
+                    except Exception:
+                        pass
+                req_tts_device = data.get("tts_device")
+                if req_tts_device and str(req_tts_device).lower() != str(ws_pipeline.tts.device).lower():
+                    try:
+                        ws_pipeline.set_tts_device(req_tts_device)
                     except Exception:
                         pass
                 audio_b64 = data.get("data", "")
@@ -227,6 +265,12 @@ async def websocket_assistant_endpoint(websocket: WebSocket) -> None:
                 if req_model and req_model != ws_pipeline.llm.model:
                     try:
                         await ws_pipeline.set_model(req_model, load=False)
+                    except Exception:
+                        pass
+                req_tts_device = data.get("tts_device")
+                if req_tts_device and str(req_tts_device).lower() != str(ws_pipeline.tts.device).lower():
+                    try:
+                        ws_pipeline.set_tts_device(req_tts_device)
                     except Exception:
                         pass
                 prompt = data.get("prompt", "")

@@ -31,6 +31,12 @@ export default function NexusVoiceApp() {
   const [isLoadingModels, setIsLoadingModels] = useState<boolean>(false);
   const [isEjectingModel, setIsEjectingModel] = useState<boolean>(false);
 
+  // Kokoro TTS Processing Unit state (CPU / NPU)
+  const [selectedTTSDevice, setSelectedTTSDevice] = useState<string>("cpu");
+  const [ttsEffectiveDevice, setTtsEffectiveDevice] = useState<string>("CPU");
+  const [availableTTSDevices, setAvailableTTSDevices] = useState<string[]>(["cpu", "npu"]);
+  const [isSwitchingTTSDevice, setIsSwitchingTTSDevice] = useState<boolean>(false);
+
   // Status & metrics
   const [statusText, setStatusText] = useState<string>(
     "System Ready • Listening Pipeline Active"
@@ -85,6 +91,15 @@ export default function NexusVoiceApp() {
       }
       if (data.lm_studio_model) {
         setSelectedModel((prev) => prev || data.lm_studio_model);
+      }
+      if (data.tts_device) {
+        setSelectedTTSDevice(data.tts_device.toLowerCase());
+      }
+      if (data.tts_effective_device) {
+        setTtsEffectiveDevice(data.tts_effective_device);
+      }
+      if (data.tts_available_devices && data.tts_available_devices.length > 0) {
+        setAvailableTTSDevices(data.tts_available_devices);
       }
       setStatusText("All Pipelines Active • Ready for Voice Input");
     } catch (err) {
@@ -197,6 +212,57 @@ export default function NexusVoiceApp() {
     [fetchModels]
   );
 
+  // Handle Kokoro TTS Processing Unit Switch (CPU / NPU)
+  const handleSelectTTSDevice = useCallback(
+    async (device: string) => {
+      const target = device.toLowerCase();
+      if (!target || isSwitchingTTSDevice) return;
+      setIsSwitchingTTSDevice(true);
+      const targetLabel = target === "npu" ? "NPU (Intel AI Boost)" : "CPU";
+      setStatusText(`Switching Kokoro TTS processing unit to ${targetLabel}...`);
+      setSelectedTTSDevice(target);
+
+      try {
+        const baseUrl = getApiBaseUrl();
+        const res = await fetch(`${baseUrl}/api/tts/device`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ device: target }),
+        });
+        if (!res.ok) throw new Error("Failed to switch TTS processing unit");
+        const data = await res.json();
+        if (data.effective_device) {
+          setTtsEffectiveDevice(data.effective_device);
+        }
+        setStatusText(data.message || `Kokoro TTS processing unit set to ${targetLabel}`);
+
+        // Update health state
+        setHealth((prev) =>
+          prev
+            ? {
+                ...prev,
+                tts_device: target,
+                tts_effective_device: data.effective_device,
+              }
+            : null
+        );
+
+        // Notify WebSocket if connected
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(
+            JSON.stringify({ type: "set_tts_device", device: target })
+          );
+        }
+      } catch (err) {
+        console.error("TTS device switch error:", err);
+        setStatusText(`Failed to switch TTS unit: ${err}`);
+      } finally {
+        setIsSwitchingTTSDevice(false);
+      }
+    },
+    [isSwitchingTTSDevice]
+  );
+
   // WebSocket Message Dispatcher
   const handleWebSocketMessage = useCallback(
     (msg: WSInboundMessage) => {
@@ -222,6 +288,32 @@ export default function NexusVoiceApp() {
         if (changedModel) {
           setSelectedModel(changedModel);
           setHealth((prev) => (prev ? { ...prev, lm_studio_model: changedModel } : null));
+        }
+        if (msg.message) {
+          setStatusText(msg.message);
+        }
+        return;
+      }
+
+      if (msg.type === "tts_device") {
+        if (msg.device) {
+          setSelectedTTSDevice(msg.device.toLowerCase());
+        }
+        if (msg.effective_device) {
+          setTtsEffectiveDevice(msg.effective_device);
+        }
+        if (msg.available_devices && msg.available_devices.length > 0) {
+          setAvailableTTSDevices(msg.available_devices);
+        }
+        return;
+      }
+
+      if (msg.type === "tts_device_changed") {
+        if (msg.device) {
+          setSelectedTTSDevice(msg.device.toLowerCase());
+        }
+        if (msg.effective_device) {
+          setTtsEffectiveDevice(msg.effective_device);
         }
         if (msg.message) {
           setStatusText(msg.message);
@@ -552,6 +644,7 @@ export default function NexusVoiceApp() {
           speaker: selectedSpeaker,
           play_audio: playHostAudio,
           model: selectedModel,
+          tts_device: selectedTTSDevice,
         })
       );
     } else {
@@ -569,6 +662,7 @@ export default function NexusVoiceApp() {
     formData.append("file", blob, "input.wav");
     formData.append("speaker", selectedSpeaker);
     formData.append("play_audio", String(playHostAudio));
+    formData.append("tts_device", selectedTTSDevice);
 
     try {
       const baseUrl = getApiBaseUrl();
@@ -665,6 +759,7 @@ export default function NexusVoiceApp() {
           speaker: selectedSpeaker,
           play_audio: playHostAudio,
           model: selectedModel,
+          tts_device: selectedTTSDevice,
         })
       );
     } else {
@@ -740,6 +835,7 @@ export default function NexusVoiceApp() {
         body: JSON.stringify({
           text: fullText,
           speaker: selectedSpeaker,
+          device: selectedTTSDevice,
         }),
       });
 
@@ -806,6 +902,11 @@ export default function NexusVoiceApp() {
         isEjectingModel={isEjectingModel}
         selectedSpeaker={selectedSpeaker}
         onSelectSpeaker={setSelectedSpeaker}
+        selectedTTSDevice={selectedTTSDevice}
+        onSelectTTSDevice={handleSelectTTSDevice}
+        isSwitchingTTSDevice={isSwitchingTTSDevice}
+        availableTTSDevices={availableTTSDevices}
+        ttsEffectiveDevice={ttsEffectiveDevice}
         playHostAudio={playHostAudio}
         onTogglePlayHostAudio={setPlayHostAudio}
         isCheckingHealth={isCheckingHealth}
@@ -821,6 +922,8 @@ export default function NexusVoiceApp() {
           statusText={statusText}
           metrics={metrics}
           onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
+          ttsDevice={selectedTTSDevice}
+          onSelectTTSDevice={handleSelectTTSDevice}
         />
 
         {/* Chat Area Component */}

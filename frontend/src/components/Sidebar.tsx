@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Mic, RefreshCw, Cpu, Sparkles, Bot, Eject } from "lucide-react";
+import { Mic, RefreshCw, Cpu, Sparkles, Bot, Eject, Zap } from "lucide-react";
 import { HealthStatus, LMStudioModelInfo } from "@/lib/types";
 
 interface SidebarProps {
@@ -15,6 +15,11 @@ interface SidebarProps {
   isEjectingModel?: boolean;
   selectedSpeaker: string;
   onSelectSpeaker: (speaker: string) => void;
+  selectedTTSDevice: string;
+  onSelectTTSDevice: (device: string) => void;
+  isSwitchingTTSDevice?: boolean;
+  availableTTSDevices?: string[];
+  ttsEffectiveDevice?: string;
   playHostAudio: boolean;
   onTogglePlayHostAudio: (val: boolean) => void;
   isCheckingHealth: boolean;
@@ -34,6 +39,11 @@ export function Sidebar({
   isEjectingModel,
   selectedSpeaker,
   onSelectSpeaker,
+  selectedTTSDevice,
+  onSelectTTSDevice,
+  isSwitchingTTSDevice,
+  availableTTSDevices,
+  ttsEffectiveDevice,
   playHostAudio,
   onTogglePlayHostAudio,
   isCheckingHealth,
@@ -185,7 +195,7 @@ export function Sidebar({
         </div>
 
         {/* TTS Card */}
-        <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200 hover:bg-neutral-100/70 hover:border-neutral-300 transition-all duration-200">
+        <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200 hover:border-neutral-300 transition-all duration-200">
           <div className="flex items-center justify-between mb-1">
             <div className="flex items-center gap-2">
               <span className="status-indicator online" />
@@ -193,16 +203,92 @@ export function Sidebar({
                 Kokoro-82M TTS
               </span>
             </div>
-            <span className="text-[10px] font-mono text-black bg-neutral-200/80 px-1 rounded">
-              PyTorch / OV
+            <span className="text-[10px] font-mono text-black bg-neutral-200/80 px-1.5 py-0.5 rounded uppercase font-semibold">
+              {ttsEffectiveDevice || selectedTTSDevice.toUpperCase()}
             </span>
           </div>
-          <div className="text-[12px] font-mono text-neutral-600 truncate">
+          <div className="text-[12px] font-mono text-neutral-600 truncate mb-2.5">
             {health?.tts_model ? health.tts_model.split("/").pop() : "Kokoro-82M"}
           </div>
-          <div className="text-[11px] text-neutral-500 mt-1 flex items-center justify-between">
-            <span>Sample Rate:</span>
-            <strong className="text-black font-mono">24,000 Hz</strong>
+
+          {/* Processing Unit Selector inside Kokoro TTS Card */}
+          <div className="pt-2 border-t border-neutral-200/80 flex flex-col gap-1.5">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-neutral-600 font-medium flex items-center gap-1.5">
+                <Cpu className="w-3 h-3 text-black" />
+                Processing Unit
+              </span>
+              {isSwitchingTTSDevice ? (
+                <span className="text-[10px] font-mono text-neutral-500 flex items-center gap-1">
+                  <RefreshCw className="w-2.5 h-2.5 animate-spin text-black" />
+                  Switching...
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono text-black font-semibold">
+                  {selectedTTSDevice.toLowerCase() === "npu"
+                    ? "Intel AI Boost"
+                    : "Host CPU"}
+                </span>
+              )}
+            </div>
+
+            {/* Segmented Control Buttons */}
+            <div className="grid grid-cols-2 gap-1.5 p-1 bg-neutral-100 rounded-lg border border-neutral-200">
+              <button
+                type="button"
+                id="tts-unit-cpu-btn"
+                onClick={() => onSelectTTSDevice("cpu")}
+                disabled={isSwitchingTTSDevice}
+                className={`flex flex-col items-center justify-center py-1.5 px-2 rounded-md text-xs font-semibold transition-all duration-200 cursor-pointer disabled:opacity-50 ${
+                  selectedTTSDevice.toLowerCase() === "cpu"
+                    ? "bg-black text-white shadow-xs"
+                    : "bg-transparent text-neutral-600 hover:text-black hover:bg-white"
+                }`}
+              >
+                <span>CPU</span>
+                <span
+                  className={`text-[9px] font-normal tracking-tight ${
+                    selectedTTSDevice.toLowerCase() === "cpu"
+                      ? "text-neutral-300"
+                      : "text-neutral-400"
+                  }`}
+                >
+                  Host CPU
+                </span>
+              </button>
+
+              <button
+                type="button"
+                id="tts-unit-npu-btn"
+                onClick={() => onSelectTTSDevice("npu")}
+                disabled={isSwitchingTTSDevice}
+                className={`flex flex-col items-center justify-center py-1.5 px-2 rounded-md text-xs font-semibold transition-all duration-200 cursor-pointer disabled:opacity-50 ${
+                  selectedTTSDevice.toLowerCase() === "npu"
+                    ? "bg-black text-white shadow-xs"
+                    : "bg-transparent text-neutral-600 hover:text-black hover:bg-white"
+                }`}
+              >
+                <span className="flex items-center gap-1">
+                  <Zap
+                    className={`w-3 h-3 ${
+                      selectedTTSDevice.toLowerCase() === "npu"
+                        ? "text-amber-300 fill-amber-300"
+                        : "text-neutral-500"
+                    }`}
+                  />
+                  <span>NPU</span>
+                </span>
+                <span
+                  className={`text-[9px] font-normal tracking-tight ${
+                    selectedTTSDevice.toLowerCase() === "npu"
+                      ? "text-neutral-300"
+                      : "text-neutral-400"
+                  }`}
+                >
+                  Intel AI Boost
+                </span>
+              </button>
+            </div>
           </div>
         </div>
       </div>

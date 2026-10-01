@@ -57,3 +57,34 @@ def test_fallback_synthesize() -> None:
     assert isinstance(data, np.ndarray)
     assert sr > 0
     assert len(data) > 0
+
+
+def test_tts_set_device_cpu_npu() -> None:
+    """Tests dynamic switching between CPU and NPU processing units."""
+    from unittest.mock import MagicMock
+
+    engine = KokoroTTSEngine(device="cpu")
+    engine.load_model = MagicMock()
+    info = engine.get_device_info()
+    assert info["device"] == "cpu"
+    assert "cpu" in info["available_devices"]
+
+    # Switch to NPU
+    res_npu = engine.set_device("NPU")
+    assert res_npu["device"] == "npu"
+    assert engine.device == "npu"
+    assert engine.backend == "openvino"
+
+    # Switch back to CPU
+    res_cpu = engine.set_device("cpu")
+    assert res_cpu["device"] == "cpu"
+    assert engine.device == "cpu"
+    assert res_cpu["effective_device"] == "CPU"
+
+
+def test_tts_set_device_invalid_raises() -> None:
+    """Verifies that setting an unsupported device raises ValueError."""
+    engine = KokoroTTSEngine(device="cpu")
+    with pytest.raises(ValueError, match="Unsupported TTS device"):
+        engine.set_device("quantum")
+

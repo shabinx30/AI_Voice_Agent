@@ -304,6 +304,64 @@ body {
   margin-top: 4px;
 }
 
+.segmented-control {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  background: #f3f4f6;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
+.segmented-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #4b5563;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.segmented-btn span {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.segmented-btn small {
+  font-size: 0.65rem;
+  font-weight: 400;
+  color: #6b7280;
+}
+
+.segmented-btn:hover {
+  color: #000000;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.segmented-btn.active {
+  background: #000000;
+  color: #ffffff;
+  border-color: #000000;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.segmented-btn.active small {
+  color: #d1d5db;
+}
+
+.segmented-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .spin-animation {
   animation: spin 0.8s linear infinite;
 }

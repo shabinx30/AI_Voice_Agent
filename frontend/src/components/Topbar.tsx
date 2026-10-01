@@ -8,12 +8,16 @@ interface TopbarProps {
   statusText: string;
   metrics: LatencyMetrics;
   onOpenMobileSidebar: () => void;
+  ttsDevice?: string;
+  onSelectTTSDevice?: (device: string) => void;
 }
 
 export function Topbar({
   statusText,
   metrics,
   onOpenMobileSidebar,
+  ttsDevice,
+  onSelectTTSDevice,
 }: TopbarProps) {
   return (
     <header className="glass-panel shrink-0 flex items-center justify-between px-5 py-3.5 gap-4 bg-white border border-neutral-200 shadow-xs">
@@ -68,6 +72,19 @@ export function Topbar({
             {metrics.tts_ms !== undefined ? `${metrics.tts_ms}ms` : "--"}
           </span>
         </div>
+
+        {/* TTS Unit Quick Selector */}
+        {ttsDevice && (
+          <button
+            type="button"
+            onClick={() => onSelectTTSDevice?.(ttsDevice.toLowerCase() === "cpu" ? "npu" : "cpu")}
+            className="px-2 py-1 rounded-md bg-neutral-100 hover:bg-neutral-200 border border-neutral-300 text-black font-semibold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+            title={`Kokoro TTS Processing Unit: ${ttsDevice.toUpperCase()}. Click to switch to ${ttsDevice.toLowerCase() === "cpu" ? "NPU" : "CPU"}.`}
+          >
+            <span className="text-neutral-500 mr-0.5">UNIT:</span>
+            <span className="text-black font-bold uppercase">{ttsDevice}</span>
+          </button>
+        )}
 
         {/* TTFA Latency Badge */}
         <div

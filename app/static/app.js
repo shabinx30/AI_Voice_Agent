@@ -37,6 +37,12 @@ const llmDot = document.getElementById('llm-dot');
 const llmModelName = document.getElementById('llm-model-name');
 const ttsDot = document.getElementById('tts-dot');
 const ttsModelName = document.getElementById('tts-model-name');
+const ttsDeviceName = document.getElementById('tts-device-name');
+const ttsUnitHeaderBadge = document.getElementById('tts-unit-header-badge');
+const ttsUnitBadge = document.getElementById('tts-unit-badge');
+const staticTtsCpuBtn = document.getElementById('static-tts-cpu-btn');
+const staticTtsNpuBtn = document.getElementById('static-tts-npu-btn');
+let activeTtsDevice = 'cpu';
 const systemStatusText = document.getElementById('system-status-text');
 
 const metricSTT = document.getElementById('metric-stt');
@@ -357,6 +363,16 @@ function handleWebSocketMessage(msg) {
     return;
   }
 
+  if (msg.type === 'tts_device' || msg.type === 'tts_device_changed') {
+    if (msg.device) {
+      updateTtsDeviceUI(msg.device, msg.effective_device);
+    }
+    if (msg.message) {
+      systemStatusText.textContent = msg.message;
+    }
+    return;
+  }
+
   if (msg.type === 'transcription') {
     // STT completed: update user speech bubble immediately
     if (activeUserBubble) {
@@ -473,6 +489,9 @@ async function checkSystemHealth() {
     // TTS
     ttsDot.className = 'status-indicator online';
     ttsModelName.textContent = data.tts_model;
+    if (data.tts_device) {
+      updateTtsDeviceUI(data.tts_device, data.tts_effective_device);
+    }
 
     // Speakers (Kokoro-82M Voice Personas)
     if (data.tts_speakers && data.tts_speakers.length > 0) {
@@ -740,6 +759,7 @@ async function handleRecordingComplete() {
       speaker: speakerSelect.value,
       play_audio: playHostAudio.checked,
       model: modelSelect ? modelSelect.value : activeModelId,
+      tts_device: activeTtsDevice,
     }));
   } else {
     // HTTP Fallback
@@ -752,6 +772,7 @@ async function handleHttpAudioFallback(blob, userMsgEl, assistantMsgEl) {
   formData.append('file', blob, 'input.wav');
   formData.append('speaker', speakerSelect.value);
   formData.append('play_audio', playHostAudio.checked);
+  formData.append('tts_device', activeTtsDevice);
 
   try {
     const res = await fetch('/api/interact', {
@@ -814,6 +835,7 @@ async function handleTextSubmit() {
       speaker: speakerSelect.value,
       play_audio: playHostAudio.checked,
       model: modelSelect ? modelSelect.value : activeModelId,
+      tts_device: activeTtsDevice,
     }));
   } else {
     // HTTP Fallback
@@ -894,6 +916,7 @@ async function handleHttpTextFallback(promptText, assistantMsgEl) {
       body: JSON.stringify({
         text: replyText,
         speaker: speakerSelect.value,
+        device: activeTtsDevice,
       }),
     });
 
@@ -1152,6 +1175,47 @@ refreshStatusBtn.addEventListener('click', () => {
 if (modelSelect) modelSelect.addEventListener('change', handleModelChange);
 if (refreshModelsBtn) refreshModelsBtn.addEventListener('click', fetchAvailableModels);
 if (ejectModelBtn) ejectModelBtn.addEventListener('click', handleEjectModel);
+
+function updateTtsDeviceUI(device, effective) {
+  const isNpu = String(device).toLowerCase() === 'npu';
+  activeTtsDevice = isNpu ? 'npu' : 'cpu';
+  if (staticTtsCpuBtn) staticTtsCpuBtn.classList.toggle('active', !isNpu);
+  if (staticTtsNpuBtn) staticTtsNpuBtn.classList.toggle('active', isNpu);
+  const displayLabel = isNpu ? 'NPU (Intel AI Boost)' : 'Host CPU';
+  if (ttsDeviceName) ttsDeviceName.textContent = displayLabel;
+  const badgeText = effective || activeTtsDevice.toUpperCase();
+  if (ttsUnitHeaderBadge) ttsUnitHeaderBadge.textContent = badgeText;
+  if (ttsUnitBadge) ttsUnitBadge.textContent = activeTtsDevice.toUpperCase();
+}
+
+async function handleTtsDeviceSelect(targetDevice) {
+  const device = targetDevice.toLowerCase();
+  if (device === activeTtsDevice) return;
+  updateTtsDeviceUI(device);
+  systemStatusText.textContent = `Switching Kokoro TTS processing unit to ${device.toUpperCase()}...`;
+
+  try {
+    const res = await fetch('/api/tts/device', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device }),
+    });
+    if (!res.ok) throw new Error('Failed to set TTS processing unit');
+    const data = await res.json();
+    updateTtsDeviceUI(data.device, data.effective_device);
+    systemStatusText.textContent = data.message || `Kokoro TTS processing unit set to ${device.toUpperCase()}`;
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'set_tts_device', device }));
+    }
+  } catch (err) {
+    console.error('Failed to set TTS device:', err);
+    systemStatusText.textContent = `Error switching TTS unit: ${err.message}`;
+  }
+}
+
+if (staticTtsCpuBtn) staticTtsCpuBtn.addEventListener('click', () => handleTtsDeviceSelect('cpu'));
+if (staticTtsNpuBtn) staticTtsNpuBtn.addEventListener('click', () => handleTtsDeviceSelect('npu'));
 
 window.addEventListener('DOMContentLoaded', () => {
   drawIdleVisualizer();

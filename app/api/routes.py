@@ -99,6 +99,26 @@ class HealthResponse(BaseModel):
     lm_studio_loaded_models: List[str] = Field(default_factory=list)
     tts_model: str
     tts_speakers: List[str]
+    tts_device: str = "cpu"
+    tts_effective_device: Optional[str] = None
+    tts_available_devices: List[str] = Field(default_factory=list)
+
+
+class TTSDeviceRequest(BaseModel):
+    """Request schema for selecting the active Kokoro TTS compute processing unit."""
+
+    device: str = Field(..., min_length=1, description="Compute device ('cpu' or 'npu')")
+
+
+class TTSDeviceResponse(BaseModel):
+    """Response schema for Kokoro TTS compute device status."""
+
+    status: str = "success"
+    device: str
+    effective_device: Optional[str] = None
+    backend: Optional[str] = None
+    available_devices: List[str] = Field(default_factory=list)
+    message: str
 
 
 class TranscribeResponse(BaseModel):
@@ -133,6 +153,7 @@ class TTSRequest(BaseModel):
     text: str = Field(..., min_length=1, description="Text to synthesize")
     speaker: Optional[str] = Field(None, description="Voice persona")
     language: Optional[str] = Field(None, description="Spoken language")
+    device: Optional[str] = Field(None, description="Compute device override ('cpu' or 'npu')")
 
 
 class InteractResponse(BaseModel):
@@ -151,6 +172,7 @@ class RecordRequest(BaseModel):
     duration_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
     speaker: Optional[str] = None
     language: Optional[str] = None
+    tts_device: Optional[str] = None
     play_audio: bool = False
     session_id: str = "default"
 
@@ -214,6 +236,8 @@ async def get_health() -> HealthResponse:
             lm_models = [pipeline.llm.model]
             lm_loaded = [pipeline.llm.model]
 
+    tts_info = pipeline.get_tts_device()
+
     return HealthResponse(
         status="healthy",
         stt_model=pipeline.stt.model_id,
@@ -225,6 +249,9 @@ async def get_health() -> HealthResponse:
         lm_studio_loaded_models=lm_loaded,
         tts_model=pipeline.tts.model_id,
         tts_speakers=speakers,
+        tts_device=tts_info.get("device", "cpu"),
+        tts_effective_device=tts_info.get("effective_device"),
+        tts_available_devices=tts_info.get("available_devices", ["cpu", "npu"]),
     )
 
 
@@ -315,6 +342,46 @@ async def get_speakers() -> Dict[str, List[str]]:
         "speakers": pipeline.tts.get_supported_speakers(),
         "languages": pipeline.tts.get_supported_languages(),
     }
+
+
+@router.get("/tts/device", response_model=TTSDeviceResponse)
+async def get_tts_device() -> TTSDeviceResponse:
+    """Returns the currently active Kokoro TTS compute processing unit (cpu or npu)."""
+    info = pipeline.get_tts_device()
+    return TTSDeviceResponse(
+        status="success",
+        device=info["device"],
+        effective_device=info.get("effective_device"),
+        backend=info.get("backend"),
+        available_devices=info.get("available_devices", ["cpu", "npu"]),
+        message=f"Current Kokoro TTS processing unit: {info['device'].upper()}",
+    )
+
+
+@router.post("/tts/device", response_model=TTSDeviceResponse)
+async def set_tts_device(req: TTSDeviceRequest) -> TTSDeviceResponse:
+    """Switches the Kokoro TTS compute processing unit (cpu or npu)."""
+    try:
+        info = await asyncio.to_thread(pipeline.set_tts_device, req.device)
+        return TTSDeviceResponse(
+            status="success",
+            device=info["device"],
+            effective_device=info.get("effective_device"),
+            backend=info.get("backend"),
+            available_devices=info.get("available_devices", ["cpu", "npu"]),
+            message=f"Kokoro TTS processing unit set to {info['device'].upper()} ({info.get('effective_device', info['device'].upper())})",
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+    except Exception as exc:
+        logger.error("Failed to switch TTS processing unit to '%s': %s", req.device, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to switch TTS processing unit: {exc}",
+        )
 
 
 @router.post("/transcribe", response_model=TranscribeResponse)
@@ -482,7 +549,7 @@ async def synthesize_speech(request: TTSRequest) -> Response:
     """Synthesizes text into speech using Kokoro-82M and streams the WAV audio.
 
     Args:
-        request: Text to synthesize and optional speaker voice.
+        request: Text to synthesize and optional speaker voice / device.
 
     Returns:
         Streaming WAV audio file response.
@@ -493,6 +560,7 @@ async def synthesize_speech(request: TTSRequest) -> Response:
             text=request.text,
             speaker=request.speaker,
             language=request.language,
+            device=request.device,
         )
         return Response(content=wav_bytes, media_type="audio/wav")
     except Exception as exc:
@@ -508,6 +576,7 @@ async def interact_voice(
     file: UploadFile = File(..., description="Voice recording audio file"),
     speaker: Optional[str] = Form(None),
     language: Optional[str] = Form(None),
+    tts_device: Optional[str] = Form(None),
     play_audio: bool = Form(False),
     session_id: str = Form("default"),
 ) -> InteractResponse:
@@ -517,6 +586,7 @@ async def interact_voice(
         file: Uploaded audio recording from user.
         speaker: Voice persona name.
         language: Language identifier.
+        tts_device: Optional compute processing unit for Kokoro TTS ('cpu' or 'npu').
         play_audio: Whether the server should output audio to its speakers.
         session_id: Session key for history isolation.
 
@@ -531,6 +601,7 @@ async def interact_voice(
             language=language,
             play_audio=play_audio,
             session_id=session_id,
+            tts_device=tts_device,
         )
         b64_audio = base64.b64encode(res.audio_bytes).decode("utf-8")
 
@@ -554,6 +625,7 @@ async def interact_voice_stream(
     file: UploadFile = File(..., description="Voice recording audio file"),
     speaker: Optional[str] = Form(None),
     language: Optional[str] = Form(None),
+    tts_device: Optional[str] = Form(None),
     play_audio: bool = Form(False),
     session_id: str = Form("default"),
 ) -> StreamingResponse:
@@ -563,6 +635,7 @@ async def interact_voice_stream(
         file: Uploaded audio file.
         speaker: Voice persona name.
         language: Synthesis language.
+        tts_device: Optional compute processing unit for Kokoro TTS ('cpu' or 'npu').
         play_audio: Whether to play output audio on host device speakers.
         session_id: Session key for history isolation.
 
@@ -602,6 +675,7 @@ async def interact_voice_stream(
                 on_token=_on_token,
                 on_transcription=_on_transcription,
                 session_id=session_id,
+                tts_device=tts_device,
             )
             await queue.put(
                 {
@@ -659,6 +733,7 @@ async def record_from_microphone(request: RecordRequest) -> InteractResponse:
             language=request.language,
             play_audio=request.play_audio,
             session_id=request.session_id,
+            tts_device=request.tts_device,
         )
         b64_audio = base64.b64encode(res.audio_bytes).decode("utf-8")
 

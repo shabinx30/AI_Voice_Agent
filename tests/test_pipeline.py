@@ -260,3 +260,44 @@ def test_pipeline_stream_text_prompt_generator() -> None:
 
     asyncio.run(_test())
 
+
+def test_pipeline_tts_device_management() -> None:
+    """Verifies that AssistantPipeline delegates TTS device get and set calls."""
+    mock_stt = MagicMock()
+    mock_llm = MagicMock()
+    mock_tts = MagicMock()
+
+    mock_tts.get_device_info = MagicMock(
+        return_value={
+            "device": "cpu",
+            "effective_device": "cpu",
+            "backend": "openvino",
+            "available_devices": ["cpu", "npu"],
+        }
+    )
+    mock_tts.set_device = MagicMock(
+        return_value={
+            "status": "success",
+            "device": "npu",
+            "effective_device": "npu",
+            "backend": "openvino",
+            "message": "TTS device set to npu",
+        }
+    )
+
+    pipeline = AssistantPipeline(
+        stt_engine=mock_stt,
+        llm_client=mock_llm,
+        tts_engine=mock_tts,
+    )
+
+    info = pipeline.get_tts_device()
+    assert info["device"] == "cpu"
+    mock_tts.get_device_info.assert_called_once()
+
+    set_res = pipeline.set_tts_device("npu")
+    assert set_res["status"] == "success"
+    assert set_res["device"] == "npu"
+    mock_tts.set_device.assert_called_once_with("npu")
+
+
