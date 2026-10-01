@@ -20,6 +20,16 @@ const playHostAudio = document.getElementById('play-host-audio');
 const refreshStatusBtn = document.getElementById('refresh-status-btn');
 const audioPlayer = document.getElementById('audio-player');
 
+const modelSelect = document.getElementById('model-select');
+const refreshModelsBtn = document.getElementById('refresh-models-btn');
+const ejectModelBtn = document.getElementById('eject-model-btn');
+const modelStatusBadge = document.getElementById('model-status-badge');
+const modelParamText = document.getElementById('model-param-text');
+const modelSizeText = document.getElementById('model-size-text');
+
+let availableModelsList = [];
+let activeModelId = '';
+
 const sttDot = document.getElementById('stt-dot');
 const sttModelName = document.getElementById('stt-model-name');
 const sttDeviceName = document.getElementById('stt-device-name');
@@ -323,6 +333,30 @@ function handleWebSocketMessage(msg) {
     return;
   }
 
+  if (msg.type === 'models') {
+    if (msg.models && msg.models.length > 0) {
+      availableModelsList = msg.models;
+    }
+    if (msg.current_model) {
+      activeModelId = msg.current_model;
+    }
+    renderModelSelectOptions();
+    return;
+  }
+
+  if (msg.type === 'model_changed') {
+    if (msg.model) {
+      activeModelId = msg.model;
+      if (modelSelect) modelSelect.value = msg.model;
+      if (llmModelName) llmModelName.textContent = msg.model;
+      updateModelDetailsDisplay();
+    }
+    if (msg.message) {
+      systemStatusText.textContent = msg.message;
+    }
+    return;
+  }
+
   if (msg.type === 'transcription') {
     // STT completed: update user speech bubble immediately
     if (activeUserBubble) {
@@ -428,6 +462,9 @@ async function checkSystemHealth() {
     if (data.lm_studio_connected) {
       llmDot.className = 'status-indicator online';
       llmModelName.textContent = data.lm_studio_model;
+      if (!activeModelId) {
+        activeModelId = data.lm_studio_model;
+      }
     } else {
       llmDot.className = 'status-indicator offline';
       llmModelName.textContent = 'Offline (Check LM Studio)';
@@ -707,6 +744,7 @@ async function handleRecordingComplete() {
       data: base64Audio,
       speaker: speakerSelect.value,
       play_audio: playHostAudio.checked,
+      model: modelSelect ? modelSelect.value : activeModelId,
     }));
   } else {
     // HTTP Fallback
@@ -780,6 +818,7 @@ async function handleTextSubmit() {
       prompt: text,
       speaker: speakerSelect.value,
       play_audio: playHostAudio.checked,
+      model: modelSelect ? modelSelect.value : activeModelId,
     }));
   } else {
     // HTTP Fallback
@@ -946,6 +985,155 @@ function attachAudioButton(msgDiv, audioUrl) {
 }
 
 // ============================================================================
+// LM Studio Model Management
+// ============================================================================
+function renderModelSelectOptions() {
+  if (!modelSelect) return;
+  const currentSelection = modelSelect.value || activeModelId;
+  modelSelect.innerHTML = '';
+
+  if (availableModelsList.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = activeModelId || 'qwen2.5-0.5b-instruct';
+    opt.textContent = activeModelId || 'qwen2.5-0.5b-instruct';
+    modelSelect.appendChild(opt);
+  } else {
+    availableModelsList.forEach((m) => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      const loadedMarker = m.loaded ? ' • [Loaded]' : '';
+      const paramMarker = m.params ? ` (${m.params})` : '';
+      opt.textContent = `${m.name || m.id}${paramMarker}${loadedMarker}`;
+      if (m.id === currentSelection) {
+        opt.selected = true;
+      }
+      modelSelect.appendChild(opt);
+    });
+  }
+  updateModelDetailsDisplay();
+}
+
+async function fetchAvailableModels() {
+  if (!modelSelect) return;
+  if (refreshModelsBtn) refreshModelsBtn.classList.add('spin-animation');
+  if (modelStatusBadge) {
+    modelStatusBadge.textContent = 'Scanning...';
+    modelStatusBadge.className = 'badge-subtle loading';
+  }
+
+  try {
+    const res = await fetch('/api/llm/models');
+    if (!res.ok) throw new Error('Failed to retrieve LM Studio models');
+    const data = await res.json();
+    availableModelsList = data.models || [];
+    if (data.current_model) {
+      activeModelId = data.current_model;
+    }
+    renderModelSelectOptions();
+
+    if (modelStatusBadge) {
+      const activeObj = availableModelsList.find((m) => m.id === activeModelId);
+      modelStatusBadge.textContent = activeObj && activeObj.loaded ? 'Loaded' : 'Ready';
+      modelStatusBadge.className = 'badge-subtle';
+    }
+  } catch (err) {
+    console.warn('Could not fetch models:', err);
+    if (modelStatusBadge) {
+      modelStatusBadge.textContent = 'Offline';
+      modelStatusBadge.className = 'badge-subtle';
+    }
+  } finally {
+    if (refreshModelsBtn) {
+      setTimeout(() => refreshModelsBtn.classList.remove('spin-animation'), 400);
+    }
+  }
+}
+
+function updateModelDetailsDisplay() {
+  const currentVal = modelSelect ? modelSelect.value : activeModelId;
+  const activeObj = availableModelsList.find((m) => m.id === currentVal);
+  if (activeObj) {
+    if (modelParamText) modelParamText.textContent = activeObj.params ? `Parameters: ${activeObj.params}` : 'Parameters: Local';
+    if (modelSizeText) modelSizeText.textContent = activeObj.size_formatted ? `Size: ${activeObj.size_formatted}` : '';
+    if (llmModelName) llmModelName.textContent = activeObj.name || activeObj.id;
+  }
+}
+
+async function handleModelChange(e) {
+  const newModel = e.target.value;
+  if (!newModel) return;
+
+  if (modelStatusBadge) {
+    modelStatusBadge.textContent = 'Switching...';
+    modelStatusBadge.className = 'badge-subtle loading';
+  }
+  systemStatusText.textContent = `Activating model ${newModel}...`;
+
+  try {
+    const res = await fetch('/api/llm/model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: newModel, load: true }),
+    });
+    if (!res.ok) throw new Error('Switch request failed');
+    const data = await res.json();
+
+    activeModelId = data.model;
+    const ejectedInfo = data.ejected_models && data.ejected_models.length > 0 ? ` (ejected: ${data.ejected_models.join(', ')})` : '';
+    systemStatusText.textContent = data.message || `Switched model to ${data.model}${ejectedInfo}`;
+    if (llmModelName) llmModelName.textContent = data.model;
+
+    // Send through WebSocket as well
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'set_model', model: data.model }));
+    }
+
+    if (modelStatusBadge) {
+      modelStatusBadge.textContent = data.loaded ? 'Loaded' : 'Ready';
+      modelStatusBadge.className = 'badge-subtle';
+    }
+    updateModelDetailsDisplay();
+    // Refresh models to update loaded indicators
+    fetchAvailableModels();
+  } catch (err) {
+    console.error('Failed to change model:', err);
+    systemStatusText.textContent = `Model switch error: ${err.message}`;
+    if (modelStatusBadge) {
+      modelStatusBadge.textContent = 'Error';
+      modelStatusBadge.className = 'badge-subtle';
+    }
+  }
+}
+
+async function handleEjectModel() {
+  if (ejectModelBtn) ejectModelBtn.disabled = true;
+  if (modelStatusBadge) {
+    modelStatusBadge.textContent = 'Ejecting...';
+    modelStatusBadge.className = 'badge-subtle loading';
+  }
+  systemStatusText.textContent = 'Ejecting resident model from LM Studio memory...';
+
+  try {
+    const targetModel = modelSelect ? modelSelect.value : activeModelId;
+    const res = await fetch('/api/llm/eject', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: targetModel }),
+    });
+    if (!res.ok) throw new Error('Eject request failed');
+    const data = await res.json();
+    const ejected = (data.ejected_models || []).join(', ');
+    systemStatusText.textContent = ejected ? `Ejected from memory: ${ejected}` : 'Model memory released';
+    fetchAvailableModels();
+  } catch (err) {
+    console.error('Failed to eject model:', err);
+    systemStatusText.textContent = `Model eject error: ${err.message}`;
+  } finally {
+    if (ejectModelBtn) ejectModelBtn.disabled = false;
+  }
+}
+
+// ============================================================================
 // Event Listeners & Startup
 // ============================================================================
 micBtn.addEventListener('click', () => {
@@ -961,11 +1149,22 @@ textInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') handleTextSubmit();
 });
 
-refreshStatusBtn.addEventListener('click', checkSystemHealth);
+refreshStatusBtn.addEventListener('click', () => {
+  checkSystemHealth();
+  fetchAvailableModels();
+});
+
+if (modelSelect) modelSelect.addEventListener('change', handleModelChange);
+if (refreshModelsBtn) refreshModelsBtn.addEventListener('click', fetchAvailableModels);
+if (ejectModelBtn) ejectModelBtn.addEventListener('click', handleEjectModel);
 
 window.addEventListener('DOMContentLoaded', () => {
   drawIdleVisualizer();
   checkSystemHealth();
+  fetchAvailableModels();
   initWebSocket();
-  setInterval(checkSystemHealth, 15000);
+  setInterval(() => {
+    checkSystemHealth();
+    fetchAvailableModels();
+  }, 15000);
 });

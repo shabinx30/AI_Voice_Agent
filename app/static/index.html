@@ -1,185 +1,294 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NexusVoice • AI Personal Assistant</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-  <div class="ambient-glow glow-1"></div>
-  <div class="ambient-glow glow-2"></div>
-  <div class="ambient-glow glow-3"></div>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NexusVoice • AI Personal Assistant</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="ambient-glow glow-1"></div>
+    <div class="ambient-glow glow-2"></div>
+    <div class="ambient-glow glow-3"></div>
 
-  <div class="app-layout">
-    <!-- Sidebar / Subsystem Status -->
-    <aside class="sidebar glass-panel">
-      <div class="brand">
-        <div class="brand-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-            <line x1="12" y1="19" x2="12" y2="22"></line>
-          </svg>
-        </div>
-        <div class="brand-text">
-          <h1>NexusVoice</h1>
-          <span class="badge-sub">Personal Assistant</span>
-        </div>
-      </div>
-
-      <div class="sidebar-section">
-        <h2 class="section-title">Pipelines & Hardware</h2>
-        
-        <!-- OpenVINO STT Card -->
-        <div class="subsystem-card" id="card-stt">
-          <div class="subsystem-header">
-            <span class="status-indicator online" id="stt-dot"></span>
-            <span class="subsystem-name">OpenVINO STT</span>
-          </div>
-          <div class="subsystem-model" id="stt-model-name">Whisper Base INT8</div>
-          <div class="subsystem-meta">
-            <span>Device:</span> <strong id="stt-device-name">CPU / GPU</strong>
-          </div>
-        </div>
-
-        <!-- LM Studio Card -->
-        <div class="subsystem-card" id="card-llm">
-          <div class="subsystem-header">
-            <span class="status-indicator online" id="llm-dot"></span>
-            <span class="subsystem-name">LM Studio LLM</span>
-          </div>
-          <div class="subsystem-model" id="llm-model-name">Loading...</div>
-          <div class="subsystem-meta">
-            <span>Endpoint:</span> <strong id="llm-endpoint">127.0.0.1:1234</strong>
-          </div>
-        </div>
-
-        <!-- Qwen TTS Card -->
-        <div class="subsystem-card" id="card-tts">
-          <div class="subsystem-header">
-            <span class="status-indicator online" id="tts-dot"></span>
-            <span class="subsystem-name">Kokoro-82M TTS</span>
-          </div>
-          <div class="subsystem-model" id="tts-model-name">Kokoro-82M</div>
-          <div class="subsystem-meta">
-            <span>Sample Rate:</span> <strong>24,000 Hz</strong>
-          </div>
-        </div>
-      </div>
-
-      <div class="sidebar-section">
-        <h2 class="section-title">Voice Configuration</h2>
-        <div class="control-group">
-          <label for="speaker-select">Voice Persona</label>
-          <select id="speaker-select" class="custom-select">
-            <option value="af_heart" selected>Heart (American Female)</option>
-            <option value="af_bella">Bella (American Female)</option>
-            <option value="af_nicole">Nicole (American Female)</option>
-            <option value="af_aoede">Aoede (American Female)</option>
-            <option value="af_sky">Sky (American Female)</option>
-            <option value="am_adam">Adam (American Male)</option>
-            <option value="am_michael">Michael (American Male)</option>
-            <option value="am_echo">Echo (American Male)</option>
-            <option value="am_eric">Eric (American Male)</option>
-            <option value="bf_emma">Emma (British Female)</option>
-            <option value="bf_isabella">Isabella (British Female)</option>
-            <option value="bm_george">George (British Male)</option>
-            <option value="bm_daniel">Daniel (British Male)</option>
-          </select>
-        </div>
-
-        <div class="control-group toggle-group" title="Enable to route audio to server host speakers instead of browser">
-          <label for="play-host-audio">Host Speaker Output</label>
-          <input type="checkbox" id="play-host-audio">
-        </div>
-      </div>
-
-      <div class="sidebar-footer">
-        <button id="refresh-status-btn" class="btn-ghost">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
-          </svg>
-          Check Connectivity
-        </button>
-      </div>
-    </aside>
-
-    <!-- Main Chat & Interaction Area -->
-    <main class="main-content">
-      <!-- Top Bar -->
-      <header class="topbar glass-panel">
-        <div class="topbar-status">
-          <span class="pulse-beacon"></span>
-          <span id="system-status-text">System Ready • Listening Pipeline Active</span>
-        </div>
-        <div class="latency-pills" id="latency-pills">
-          <div class="pill" title="Speech to Text Latency">STT: <span id="metric-stt">--</span></div>
-          <div class="pill" title="LLM Generation Latency">LLM: <span id="metric-llm">--</span></div>
-          <div class="pill" title="Text to Speech Latency">TTS: <span id="metric-tts">--</span></div>
-          <div class="pill highlight" title="Time To First Audio (Voice Latency)">TTFA: <span id="metric-ttfa">--</span></div>
-          <div class="pill total" title="Total Round Trip">Total: <span id="metric-total">--</span></div>
-        </div>
-      </header>
-
-      <!-- Chat Scroll Container -->
-      <section class="chat-container glass-panel" id="chat-messages">
-        <div class="message assistant-msg welcome-msg">
-          <div class="msg-avatar">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2a8 8 0 0 0-8 8v12l3-3h5a8 8 0 0 0 8-8V2z"/>
-            </svg>
-          </div>
-          <div class="msg-bubble">
-            <div class="msg-header">NexusVoice Assistant</div>
-            <div class="msg-text">
-              Hello! I am your personal voice assistant. Speak by clicking the microphone button or type below.
-              Your voice is transcribed locally via <strong>OpenVINO Whisper Base INT8</strong>, processed by your <strong>LM Studio LLM</strong>, and spoken back with <strong>Kokoro-82M TTS</strong>!
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Visualizer & Control Dock -->
-      <footer class="dock-container glass-panel">
-        <!-- Audio Waveform Canvas -->
-        <div class="visualizer-wrapper">
-          <canvas id="waveform-canvas" width="600" height="48"></canvas>
-          <div id="recording-timer" class="recording-timer hidden">00:00</div>
-        </div>
-
-        <!-- Interactive Voice and Text Controls -->
-        <div class="interaction-bar">
-          <button id="mic-btn" class="mic-button" title="Click to record voice" aria-label="Microphone">
-            <div class="mic-halo"></div>
-            <svg id="mic-icon" class="mic-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+    <div class="app-layout">
+      <!-- Sidebar / Subsystem Status -->
+      <aside class="sidebar glass-panel">
+        <div class="brand">
+          <div class="brand-icon">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"
+              ></path>
               <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
               <line x1="12" y1="19" x2="12" y2="22"></line>
             </svg>
-            <svg id="stop-icon" class="stop-svg hidden" viewBox="0 0 24 24" fill="currentColor">
-              <rect x="6" y="6" width="12" height="12" rx="2"></rect>
-            </svg>
-          </button>
+          </div>
+          <div class="brand-text">
+            <h1>NexusVoice</h1>
+            <span class="badge-sub">Personal Assistant</span>
+          </div>
+        </div>
 
-          <div class="text-input-wrap">
-            <input type="text" id="text-prompt-input" placeholder="Type a message or click mic to talk..." autocomplete="off">
-            <button id="send-btn" class="send-button" title="Send Text">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="22" y1="2" x2="11" y2="13"></line>
-                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        <div class="sidebar-section">
+          <h2 class="section-title">Pipelines & Hardware</h2>
+
+          <!-- OpenVINO STT Card -->
+          <div class="subsystem-card" id="card-stt">
+            <div class="subsystem-header">
+              <span class="status-indicator online" id="stt-dot"></span>
+              <span class="subsystem-name">OpenVINO STT</span>
+            </div>
+            <div class="subsystem-model" id="stt-model-name">
+              Whisper Base INT8
+            </div>
+            <div class="subsystem-meta">
+              <span>Device:</span>
+              <strong id="stt-device-name">CPU / GPU</strong>
+            </div>
+          </div>
+
+          <!-- LM Studio Card -->
+          <div class="subsystem-card" id="card-llm">
+            <div class="subsystem-header">
+              <span class="status-indicator online" id="llm-dot"></span>
+              <span class="subsystem-name">LM Studio LLM</span>
+            </div>
+            <div class="subsystem-model" id="llm-model-name">Loading...</div>
+            <div class="subsystem-meta">
+              <span>Endpoint:</span>
+              <strong id="llm-endpoint">127.0.0.1:1234</strong>
+            </div>
+          </div>
+
+          <!-- Qwen TTS Card -->
+          <div class="subsystem-card" id="card-tts">
+            <div class="subsystem-header">
+              <span class="status-indicator online" id="tts-dot"></span>
+              <span class="subsystem-name">Kokoro-82M TTS</span>
+            </div>
+            <div class="subsystem-model" id="tts-model-name">Kokoro-82M</div>
+            <div class="subsystem-meta">
+              <span>Sample Rate:</span> <strong>24,000 Hz</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="section-header-row">
+            <h2 class="section-title">Model Configuration</h2>
+            <button id="refresh-models-btn" class="btn-icon" title="Scan for available models in LM Studio">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
               </svg>
             </button>
           </div>
+          <div class="control-group">
+            <div class="label-row">
+              <label for="model-select">Active LM Studio Model</label>
+              <div class="model-badge-group">
+                <span id="model-status-badge" class="badge-subtle">Ready</span>
+                <button id="eject-model-btn" class="btn-eject" title="Eject active model from memory">⏏ Eject</button>
+              </div>
+            </div>
+            <select id="model-select" class="custom-select">
+              <option value="">Loading models...</option>
+            </select>
+          </div>
+          <div class="model-meta-row" id="model-meta-row">
+            <span id="model-param-text">Parameters: --</span>
+            <span id="model-size-text">Size: --</span>
+          </div>
         </div>
-      </footer>
-    </main>
-  </div>
 
-  <audio id="audio-player" class="hidden"></audio>
-  <script src="/static/app.js"></script>
-</body>
+        <div class="sidebar-section">
+          <h2 class="section-title">Voice Configuration</h2>
+          <div class="control-group">
+            <label for="speaker-select">Voice Persona</label>
+            <select id="speaker-select" class="custom-select">
+              <option value="af_heart" selected>Heart (American Female)</option>
+              <option value="af_bella">Bella (American Female)</option>
+              <option value="af_nicole">Nicole (American Female)</option>
+              <option value="af_aoede">Aoede (American Female)</option>
+              <option value="af_sky">Sky (American Female)</option>
+              <option value="am_adam">Adam (American Male)</option>
+              <option value="am_michael">Michael (American Male)</option>
+              <option value="am_echo">Echo (American Male)</option>
+              <option value="am_eric">Eric (American Male)</option>
+              <option value="bf_emma">Emma (British Female)</option>
+              <option value="bf_isabella">Isabella (British Female)</option>
+              <option value="bm_george">George (British Male)</option>
+              <option value="bm_daniel">Daniel (British Male)</option>
+            </select>
+          </div>
+
+          <div
+            class="control-group toggle-group"
+            title="Enable to route audio to server host speakers instead of browser"
+          >
+            <label for="play-host-audio">Host Speaker Output</label>
+            <input type="checkbox" id="play-host-audio" />
+          </div>
+        </div>
+
+        <div class="sidebar-footer">
+          <button id="refresh-status-btn" class="btn-ghost">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"
+              />
+            </svg>
+            Check Connectivity
+          </button>
+        </div>
+      </aside>
+
+      <!-- Main Chat & Interaction Area -->
+      <main class="main-content">
+        <!-- Top Bar -->
+        <header class="topbar glass-panel">
+          <div class="topbar-status">
+            <span class="pulse-beacon"></span>
+            <span id="system-status-text"
+              >System Ready • Listening Pipeline Active</span
+            >
+          </div>
+          <div class="latency-pills" id="latency-pills">
+            <div class="pill" title="Speech to Text Latency">
+              STT: <span id="metric-stt">--</span>
+            </div>
+            <div class="pill" title="LLM Generation Latency">
+              LLM: <span id="metric-llm">--</span>
+            </div>
+            <div class="pill" title="Text to Speech Latency">
+              TTS: <span id="metric-tts">--</span>
+            </div>
+            <div
+              class="pill highlight"
+              title="Time To First Audio (Voice Latency)"
+            >
+              TTFA: <span id="metric-ttfa">--</span>
+            </div>
+            <div class="pill total" title="Total Round Trip">
+              Total: <span id="metric-total">--</span>
+            </div>
+          </div>
+        </header>
+
+        <!-- Chat Scroll Container -->
+        <section class="chat-container glass-panel" id="chat-messages">
+          <div class="message assistant-msg welcome-msg">
+            <div class="msg-avatar">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <path d="M12 2a8 8 0 0 0-8 8v12l3-3h5a8 8 0 0 0 8-8V2z" />
+              </svg>
+            </div>
+            <div class="msg-bubble">
+              <div class="msg-header">NexusVoice Assistant</div>
+              <div class="msg-text">
+                Hello! I am your personal voice assistant. Speak by clicking the
+                microphone button or type below. Your voice is transcribed
+                locally via <strong>OpenVINO Whisper Base INT8</strong>,
+                processed by your <strong>LM Studio LLM</strong>, and spoken
+                back with <strong>Kokoro-82M TTS</strong>!
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Visualizer & Control Dock -->
+        <footer class="dock-container glass-panel">
+          <!-- Audio Waveform Canvas -->
+          <div class="visualizer-wrapper">
+            <canvas id="waveform-canvas" width="600" height="48"></canvas>
+            <div id="recording-timer" class="recording-timer hidden">00:00</div>
+          </div>
+
+          <!-- Interactive Voice and Text Controls -->
+          <div class="interaction-bar">
+            <button
+              id="mic-btn"
+              class="mic-button"
+              title="Click to record voice"
+              aria-label="Microphone"
+            >
+              <div class="mic-halo"></div>
+              <svg
+                id="mic-icon"
+                class="mic-svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path
+                  d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"
+                ></path>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                <line x1="12" y1="19" x2="12" y2="22"></line>
+              </svg>
+              <svg
+                id="stop-icon"
+                class="stop-svg hidden"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
+                <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+              </svg>
+            </button>
+
+            <div class="text-input-wrap">
+              <input
+                type="text"
+                id="text-prompt-input"
+                placeholder="Type a message or click mic to talk..."
+                autocomplete="off"
+              />
+              <button id="send-btn" class="send-button" title="Send Text">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <line x1="22" y1="2" x2="11" y2="13"></line>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </footer>
+      </main>
+    </div>
+
+    <audio id="audio-player" class="hidden"></audio>
+    <script src="/static/app.js"></script>
+  </body>
 </html>

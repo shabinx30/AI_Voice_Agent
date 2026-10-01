@@ -146,3 +146,165 @@ def test_websocket_chat_streaming() -> None:
             assert chunks[1]["text"] == "Streaming is active."
             assert len(chunks[0]["audio_base64"]) > 0
 
+
+def test_interact_response_validation_with_string_metrics() -> None:
+    """Verifies InteractResponse schema accepts string values in metrics dictionary."""
+    from app.api.routes import InteractResponse
+
+    resp = InteractResponse(
+        user_text="Hi",
+        assistant_text="Hello",
+        audio_base64="AAAA",
+        sample_rate=24000,
+        metrics={
+            "stt_ms": 12.5,
+            "total_ms": 100.0,
+            "npu_status": "available",
+            "audio_queue_depth": 0,
+        },
+    )
+    assert resp.metrics["npu_status"] == "available"
+    assert resp.metrics["audio_queue_depth"] == 0
+
+
+def test_interact_endpoint_with_npu_status() -> None:
+    """Tests /api/interact endpoint returns 200 when metrics include string npu_status."""
+    from unittest.mock import AsyncMock, patch
+    from app.api import routes
+    from app.core.pipeline import AssistantResponse, PipelineMetrics
+
+    mock_metrics = PipelineMetrics(
+        stt_latency_ms=10.0,
+        llm_latency_ms=20.0,
+        tts_latency_ms=30.0,
+        tts_synth_ms=15.0,
+        ttfa_ms=25.0,
+        total_latency_ms=60.0,
+        npu_status="available",
+    )
+    mock_resp = AssistantResponse(
+        user_text="Hello assistant",
+        assistant_text="Hi there!",
+        audio_bytes=b"dummy_wav_bytes",
+        sample_rate=24000,
+        metrics=mock_metrics,
+    )
+
+    with patch.object(
+        routes.pipeline, "process_audio_bytes", new=AsyncMock(return_value=mock_resp)
+    ):
+        response = client.post(
+            "/api/interact",
+            files={"file": ("test.wav", b"dummy_audio_bytes", "audio/wav")},
+            data={"speaker": "ryan", "play_audio": "false"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["user_text"] == "Hello assistant"
+        assert data["assistant_text"] == "Hi there!"
+        assert data["metrics"]["npu_status"] == "available"
+        assert data["metrics"]["total_ms"] == 60.0
+
+
+def test_record_endpoint_with_npu_status() -> None:
+    """Tests /api/record endpoint handles npu_status in metrics."""
+    from unittest.mock import AsyncMock, patch
+    import numpy as np
+    from app.api import routes
+    from app.core.audio import AudioProcessor
+    from app.core.pipeline import AssistantResponse, PipelineMetrics
+
+    mock_metrics = PipelineMetrics(
+        stt_latency_ms=12.0,
+        total_latency_ms=50.0,
+        npu_status="available",
+    )
+    mock_resp = AssistantResponse(
+        user_text="Microphone speech",
+        assistant_text="Microphone reply",
+        audio_bytes=b"dummy_wav_bytes",
+        sample_rate=24000,
+        metrics=mock_metrics,
+    )
+
+    with patch.object(
+        AudioProcessor, "record_microphone", return_value=np.zeros(16000, dtype=np.float32)
+    ), patch.object(
+        routes.pipeline, "process_audio_bytes", new=AsyncMock(return_value=mock_resp)
+    ):
+        response = client.post(
+            "/api/record",
+            json={"duration_seconds": 1.0, "play_audio": False},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["metrics"]["npu_status"] == "available"
+
+
+def test_get_models_endpoint() -> None:
+    """Tests GET /api/llm/models and GET /api/models."""
+    from unittest.mock import patch, AsyncMock
+    from app.api import routes
+
+    mock_models = [
+        {
+            "id": "qwen2.5-0.5b-instruct",
+            "name": "Qwen2.5 0.5B Instruct",
+            "loaded": True,
+            "params": "630M",
+            "architecture": "qwen2",
+            "size_bytes": 675710816,
+            "size_formatted": "644.4 MB",
+            "type": "llm",
+        },
+        {
+            "id": "qwen2.5-3b-instruct",
+            "name": "Qwen2.5 3B Instruct",
+            "loaded": False,
+            "params": "3.4B",
+            "architecture": "qwen2",
+            "size_bytes": 2104932768,
+            "size_formatted": "1.96 GB",
+            "type": "llm",
+        },
+    ]
+
+    with patch.object(
+        routes.pipeline.llm, "list_available_models", new=AsyncMock(return_value=mock_models)
+    ):
+        res1 = client.get("/api/llm/models")
+        assert res1.status_code == 200
+        data1 = res1.json()
+        assert data1["status"] == "success"
+        assert len(data1["models"]) == 2
+        assert "loaded_models" in data1
+        assert "qwen2.5-0.5b-instruct" in data1["loaded_models"]
+
+        res2 = client.get("/api/models")
+        assert res2.status_code == 200
+        assert res2.json()["current_model"] == routes.pipeline.llm.model
+
+
+def test_select_model_endpoint() -> None:
+    """Tests POST /api/llm/model switching active model."""
+    from unittest.mock import patch, AsyncMock
+    from app.api import routes
+
+    mock_result = {
+        "status": "success",
+        "model": "qwen2.5-3b-instruct",
+        "loaded": True,
+        "message": "Switched to qwen2.5-3b-instruct",
+    }
+
+    with patch.object(
+        routes.pipeline, "set_model", new=AsyncMock(return_value=mock_result)
+    ):
+        res = client.post("/api/llm/model", json={"model": "qwen2.5-3b-instruct", "load": True})
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        assert data["model"] == "qwen2.5-3b-instruct"
+        assert data["loaded"] is True
+
+

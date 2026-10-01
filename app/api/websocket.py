@@ -8,7 +8,7 @@ import base64
 import json
 import logging
 import uuid
-from typing import Optional
+from typing import Any, Dict, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.core.audio import AudioProcessor
@@ -23,14 +23,18 @@ from app.core.shared import get_pipeline
 ws_pipeline = get_pipeline()
 
 
-def _metrics_dict(metrics) -> dict:
+def _metrics_dict(metrics: Any) -> dict:
+    if metrics is None:
+        return {}
+    if isinstance(metrics, dict):
+        return dict(metrics)
     base = {
-        "stt_ms": metrics.stt_latency_ms,
-        "llm_ms": metrics.llm_latency_ms,
-        "tts_ms": metrics.tts_latency_ms,
+        "stt_ms": getattr(metrics, "stt_latency_ms", 0.0),
+        "llm_ms": getattr(metrics, "llm_latency_ms", 0.0),
+        "tts_ms": getattr(metrics, "tts_latency_ms", 0.0),
         "tts_synth_ms": getattr(metrics, "tts_synth_ms", 0.0),
-        "ttfa_ms": metrics.ttfa_ms,
-        "total_ms": metrics.total_latency_ms,
+        "ttfa_ms": getattr(metrics, "ttfa_ms", 0.0),
+        "total_ms": getattr(metrics, "total_latency_ms", 0.0),
     }
     for attr, key in (
         ("llm_ttft_ms", "llm_ttft_ms"),
@@ -46,7 +50,9 @@ def _metrics_dict(metrics) -> dict:
         ("npu_status", "npu_status"),
     ):
         try:
-            base[key] = getattr(metrics, attr)
+            val = getattr(metrics, attr, None)
+            if val is not None:
+                base[key] = val
         except Exception:
             pass
     return base
@@ -103,7 +109,43 @@ async def websocket_assistant_endpoint(websocket: WebSocket) -> None:
                 )
                 continue
 
+            if msg_type == "get_models":
+                try:
+                    available = await ws_pipeline.get_available_models()
+                    await websocket.send_json({
+                        "type": "models",
+                        "current_model": ws_pipeline.llm.model,
+                        "models": available,
+                    })
+                except Exception as exc:
+                    await websocket.send_json({"type": "error", "message": f"Could not list models: {exc}"})
+                continue
+
+            if msg_type == "set_model":
+                new_model = data.get("model")
+                if not new_model:
+                    await websocket.send_json({"type": "error", "message": "Missing model field."})
+                    continue
+                try:
+                    res = await ws_pipeline.set_model(new_model, load=data.get("load", True))
+                    await websocket.send_json({
+                        "type": "model_changed",
+                        "status": "success",
+                        "model": res["model"],
+                        "loaded": res.get("loaded", False),
+                        "message": res.get("message", f"Switched to {new_model}"),
+                    })
+                except Exception as exc:
+                    await websocket.send_json({"type": "error", "message": f"Could not switch model: {exc}"})
+                continue
+
             if msg_type == "audio":
+                req_model = data.get("model")
+                if req_model and req_model != ws_pipeline.llm.model:
+                    try:
+                        await ws_pipeline.set_model(req_model, load=False)
+                    except Exception:
+                        pass
                 audio_b64 = data.get("data", "")
                 speaker = data.get("speaker")
                 play_host = data.get("play_audio", False)
@@ -181,6 +223,12 @@ async def websocket_assistant_endpoint(websocket: WebSocket) -> None:
                     )
 
             elif msg_type == "text":
+                req_model = data.get("model")
+                if req_model and req_model != ws_pipeline.llm.model:
+                    try:
+                        await ws_pipeline.set_model(req_model, load=False)
+                    except Exception:
+                        pass
                 prompt = data.get("prompt", "")
                 speaker = data.get("speaker")
                 play_host = data.get("play_audio", False)

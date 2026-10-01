@@ -22,7 +22,7 @@ import io
 import logging
 import time
 from collections import OrderedDict
-from threading import Lock
+from threading import Lock, RLock
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import soundfile as sf
@@ -104,6 +104,18 @@ class KokoroTTSEngine:
 
         self._pipeline = None
         self._is_loaded: bool = False
+        # Reusable G2P front-end for the OpenVINO backend. Optimum's
+        # preprocess_input() builds a fresh KPipeline (misaki/G2P init,
+        # ~0.7s) and re-reads the voice pack (~0.4s) on EVERY synthesis;
+        # profiling shows that is ~57% of short-sentence TTS latency.
+        # Keep one KPipeline per lang + one voice tensor per (lang, voice)
+        # alive instead. G2P access is serialized by _g2p_lock (an RLock:
+        # helpers nest _get_g2p_pipeline inside _get_voice_pack inside
+        # _preprocess_kokoro; held for milliseconds once warm); NPU/CPU
+        # inference keeps using _infer_lock.
+        self._g2p_lock = RLock()
+        self._g2p_pipelines = {}
+        self._voice_packs = {}
         # Small LRU cache for repeated phrases ("I didn't catch that", etc.).
         # Key: (text, speaker). Value: (audio copy, sr). Thread-safe via Lock
         # since synthesize() runs in multiple to_thread workers.
@@ -197,9 +209,15 @@ class KokoroTTSEngine:
         )
         start_time = time.perf_counter()
         try:
+            ov_config = {
+                "PERFORMANCE_HINT": "LATENCY",
+                "INFERENCE_NUM_THREADS": 8,
+                "NUM_STREAMS": "1",
+            }
             self._ov_model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
                 self._ov_model_id,
                 device="CPU",
+                ov_config=ov_config,
                 trust_remote_code=True,
             )
             self.effective_device = "CPU"
@@ -314,6 +332,99 @@ class KokoroTTSEngine:
             self.effective_device = "CPU"
             return None
 
+    def _get_g2p_pipeline(self, lang_code: str):
+        """Returns a cached misaki G2P pipeline for ``lang_code`` (kept alive).
+
+        Building KPipeline costs ~0.7s + ~550MB transient churn per call;
+        reuse makes per-synthesis G2P cost milliseconds. Serialized by
+        _g2p_lock; one instance per language code.
+        """
+        with self._g2p_lock:
+            pipe = self._g2p_pipelines.get(lang_code)
+            if pipe is None:
+                from kokoro import KPipeline
+
+                pipe = KPipeline(
+                    lang_code=lang_code,
+                    repo_id=self.model_id or "hexgrad/Kokoro-82M",
+                    model=False,
+                )
+                self._g2p_pipelines[lang_code] = pipe
+            return pipe
+
+    def _get_voice_pack(self, lang_code: str, voice: str):
+        """Returns a cached voice/style tensor for (lang, voice) (kept alive).
+
+        Reading the voice pack from disk costs ~0.4s per synthesis; the
+        cached tensor is ~0.5MB. Same index rule as optimum's preprocess.
+        """
+        key = (lang_code, voice)
+        with self._g2p_lock:
+            pack = self._voice_packs.get(key)
+            if pack is None:
+                pipe = self._get_g2p_pipeline(lang_code)
+                pack = pipe.load_voice(voice)
+                self._voice_packs[key] = pack
+            return pack
+
+    def _preprocess_kokoro(
+        self,
+        text: str,
+        voice: str,
+        lang_code: str,
+        split_pattern: str = r"\n+",
+    ) -> dict:
+        """G2P + tokenize with reused front-end (same math as optimum's preprocess).
+
+        Mirrors ``_OVModelForKokoroTextToSpeech.preprocess_input`` segment
+        for segment (same KPipeline chunking, same vocab BOS/EOS wrapping,
+        same voice-pack index rule) but reuses the cached G2P pipeline and
+        voice pack instead of rebuilding them per call. Must only be used
+        with the matching ``_ov_model.config.vocab``.
+
+        Returns:
+            Dict with ``segments`` (list of input_ids/ref_s/speed/phonemes/
+            graphemes) plus top-level input_ids/ref_s/speed for single chunks.
+        """
+        if not self._is_loaded or self._ov_model is None:
+            self.load_model()
+        vocab = getattr(self._ov_model.config, "vocab", None)
+        if vocab is None:
+            raise ValueError("Model config has no 'vocab'; cannot tokenize phonemes.")
+        with self._g2p_lock:
+            pipe = self._get_g2p_pipeline(lang_code)
+            segments = list(pipe(text=text, split_pattern=split_pattern))
+            voice_pack = self._get_voice_pack(lang_code, voice)
+            out = []
+            for segment in segments:
+                phonemes = segment.phonemes
+                if not phonemes:
+                    continue
+                token_ids = [vocab.get(p) for p in phonemes]
+                token_ids = [i for i in token_ids if i is not None]
+                input_ids = torch.LongTensor([[0, *token_ids, 0]])
+                ref_s = voice_pack[min(len(phonemes) - 1, voice_pack.shape[0] - 1)]
+                out.append(
+                    {
+                        "input_ids": input_ids,
+                        "ref_s": ref_s,
+                        "speed": 1.0,
+                        "phonemes": phonemes,
+                        "graphemes": segment.graphemes,
+                    }
+                )
+        if not out:
+            raise ValueError(f"G2P produced no phoneme segments for: {text!r}")
+        if len(out) == 1:
+            single = out[0]
+            return {
+                "input_ids": single["input_ids"],
+                "ref_s": single["ref_s"],
+                "speed": single["speed"],
+                "segments": out,
+            }
+        return {"segments": out}
+
     def _synthesize_npu_static(
         self,
         text: str,
@@ -339,10 +450,13 @@ class KokoroTTSEngine:
         if encoder is None:
             return None
 
-        with self._infer_lock:
-            model_inputs = self._ov_model.preprocess_input(
-                text, voice=speaker, lang_code=lang_code
-            )
+        # G2P/text frontend runs OUTSIDE _infer_lock: it touches no shared
+        # compiled state, so sentence N+1 can phonemize while sentence N
+        # synthesizes (removes 100-500ms+ scheduling delay in multi-sentence
+        # turns). Uses the cached front-end (no per-call rebuild).
+        model_inputs = self._preprocess_kokoro(
+            text, voice=speaker, lang_code=lang_code
+        )
         segments = model_inputs.get("segments") or []
         if not segments:
             return None
@@ -416,10 +530,11 @@ class KokoroTTSEngine:
         # Optimum's OpenVINO wrapper is driven through a single compiled
         # request; serialize inference while still allowing the pipeline to
         # overlap LLM streaming across sentences via worker threads.
+        # Frontend (cached) runs outside the lock; only generate() is locked.
+        model_inputs = self._preprocess_kokoro(
+            text, voice=speaker, lang_code=lang_code
+        )
         with self._infer_lock:
-            model_inputs = self._ov_model.preprocess_input(
-                text, voice=speaker, lang_code=lang_code
-            )
             waveform = self._ov_model.generate(**model_inputs)
 
         if isinstance(waveform, torch.Tensor):

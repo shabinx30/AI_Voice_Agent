@@ -1,0 +1,173 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-dark: #07090e;
+    --bg-panel: rgba(15, 18, 28, 0.72);
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-focus: rgba(99, 102, 241, 0.5);
+
+    --primary-accent: #6366f1;
+    --primary-glow: rgba(99, 102, 241, 0.45);
+    --cyan-accent: #06b6d4;
+    --emerald-accent: #10b981;
+    --rose-accent: #f43f5e;
+
+    --text-main: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    background-color: var(--bg-dark);
+    color: var(--text-main);
+    min-height: 100vh;
+    overflow: hidden;
+    position: relative;
+    user-select: none;
+  }
+}
+
+/* Ambient glow orbs */
+.ambient-glow {
+  position: fixed;
+  border-radius: 50%;
+  filter: blur(140px);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.38;
+}
+
+.glow-1 {
+  width: 550px;
+  height: 550px;
+  background: radial-gradient(circle, #4f46e5 0%, transparent 70%);
+  top: -120px;
+  left: -120px;
+}
+
+.glow-2 {
+  width: 650px;
+  height: 650px;
+  background: radial-gradient(circle, #0891b2 0%, transparent 70%);
+  bottom: -160px;
+  right: -120px;
+}
+
+.glow-3 {
+  width: 450px;
+  height: 450px;
+  background: radial-gradient(circle, #7c3aed 0%, transparent 70%);
+  top: 45%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0.16;
+}
+
+/* Glassmorphism panel base */
+.glass-panel {
+  background: var(--bg-panel);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.55);
+}
+
+/* Status dots */
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  display: inline-block;
+  flex-shrink: 0;
+  transition: all 0.3s ease;
+}
+
+.status-indicator.online {
+  background: var(--emerald-accent);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.7);
+}
+
+.status-indicator.offline {
+  background: var(--rose-accent);
+  box-shadow: 0 0 10px rgba(244, 63, 94, 0.7);
+}
+
+/* Topbar beacon */
+.pulse-beacon {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--emerald-accent);
+  box-shadow: 0 0 12px var(--emerald-accent);
+  animation: pulseBeacon 2s infinite ease-in-out;
+}
+
+@keyframes pulseBeacon {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.35); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+/* Live token stream caret */
+.stream-caret {
+  display: inline;
+  border-right: 2px solid var(--primary-accent);
+  padding-right: 1px;
+  animation: caretBlink 0.85s steps(2, start) infinite;
+}
+
+@keyframes caretBlink {
+  50% {
+    border-right-color: transparent;
+  }
+}
+
+.streamed-word {
+  display: inline;
+  animation: fadeInWord 0.22s ease-out;
+}
+
+@keyframes fadeInWord {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Pulse animation when mic is recording */
+.mic-recording-pulse {
+  animation: pulseRecording 1.4s infinite ease-in-out;
+}
+
+@keyframes pulseRecording {
+  0% { transform: scale(1); box-shadow: 0 0 20px rgba(244, 63, 94, 0.5); }
+  50% { transform: scale(1.08); box-shadow: 0 0 35px rgba(244, 63, 94, 0.85); }
+  100% { transform: scale(1); box-shadow: 0 0 20px rgba(244, 63, 94, 0.5); }
+}
+
+/* Custom modern scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}

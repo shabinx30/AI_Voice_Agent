@@ -52,6 +52,45 @@ def verify_lm_studio() -> None:
         except Exception as exc:
             logger.warning("Could not auto-start LM Studio: %s", exc)
 
+    # Eject any other models before loading the target model
+    try:
+        ps_res = subprocess.run(
+            ["lms", "ps", "--json"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            check=False,
+        )
+        if ps_res.returncode == 0 and ps_res.stdout.strip():
+            import json
+            ejected_any = False
+            for item in json.loads(ps_res.stdout):
+                ident = item.get("identifier") or item.get("modelKey")
+                keys = {
+                    item.get("identifier"),
+                    item.get("modelKey"),
+                    item.get("path"),
+                    item.get("indexedModelIdentifier"),
+                }
+                keys.discard(None)
+                if ident and settings.lm_studio_model not in keys:
+                    logger.info("Ejecting previously loaded model: %s", ident)
+                    res = subprocess.run(
+                        ["lms", "unload", ident],
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                        check=False,
+                    )
+                    if res.returncode == 0:
+                        ejected_any = True
+            if ejected_any:
+                time.sleep(0.5)
+    except Exception as exc:
+        logger.debug("Pre-load eject note: %s", exc)
+
     # Load model if needed
     try:
         subprocess.run(

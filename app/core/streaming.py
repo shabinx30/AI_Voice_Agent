@@ -147,6 +147,7 @@ async def run_streaming_pipeline(
         "total": 0,
         "display_texts": {},
         "llm_start": 0.0,
+        "llm_end": 0.0,
         "first_token_seen": False,
         "first_sentence_seen": False,
         "tts_wall_start": None,
@@ -233,6 +234,12 @@ async def run_streaming_pipeline(
             state["producer_error"] = exc
         finally:
             state["producer_done"] = True
+            # Stamp LLM stream end HERE (token stream exhausted). Measuring
+            # llm_elapsed later (after TTS workers/emitter drain) would
+            # wrongly fold TTS synthesis into LLM latency and dilute
+            # tokens/sec — verified by benchmark (direct 40 tok/s vs 1.8
+            # tok/s reported for the identical stream when TTS drained first).
+            state["llm_end"] = time.perf_counter()
             # Wake workers + emitter; one sentinel per worker.
             for _ in range(n_workers):
                 try:
@@ -404,7 +411,8 @@ async def run_streaming_pipeline(
         except Exception:
             pass
 
-    llm_elapsed = max(0.0, time.perf_counter() - (state["llm_start"] or pipeline_start))
+    llm_end = state.get("llm_end") or time.perf_counter()
+    llm_elapsed = max(0.0, llm_end - (state["llm_start"] or pipeline_start))
     metrics.llm_latency_ms = round(llm_elapsed * 1000, 2)
     tracker.telemetry.llm_elapsed_s = llm_elapsed
     if state["tts_wall_start"] is not None and state["tts_wall_end"] is not None:

@@ -216,6 +216,26 @@ class AssistantPipeline:
             while len(dq) > limit:
                 dq.popleft()
 
+    async def get_available_models(self) -> List[Dict[str, Any]]:
+        """Retrieves available and running LLM models from LM Studio."""
+        return await self.llm.list_available_models()
+
+    async def set_model(self, model_id: str, load: bool = True) -> Dict[str, Any]:
+        """Switches the active LLM model used by the assistant pipeline.
+
+        Args:
+            model_id: Identifier of the target LM Studio model.
+            load: If True, attempts to preload the model into LM Studio memory.
+
+        Returns:
+            Dictionary with switch result and load status.
+        """
+        return await self.llm.set_model(model_id, load_into_memory=load)
+
+    async def eject_model(self, model_id: Optional[str] = None) -> Dict[str, Any]:
+        """Ejects a model or all models from LM Studio memory."""
+        return await self.llm.eject_model(model_id)
+
     def warmup(self, warm_npu: Optional[bool] = None) -> None:
         """Pre-loads and compiles OpenVINO and TTS models for fast first response.
 

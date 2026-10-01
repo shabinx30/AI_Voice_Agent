@@ -33,6 +33,59 @@ pipeline = get_pipeline()
 # ============================================================================
 
 
+class LLMModelInfo(BaseModel):
+    """Schema for individual LM Studio model description."""
+
+    id: str
+    name: str
+    loaded: bool = False
+    params: Optional[str] = ""
+    architecture: Optional[str] = ""
+    size_bytes: Optional[int] = 0
+    size_formatted: Optional[str] = ""
+    type: str = "llm"
+
+
+class ModelsResponse(BaseModel):
+    """Response schema listing available LM Studio models."""
+
+    status: str = "success"
+    current_model: str
+    models: List[LLMModelInfo]
+    loaded_models: List[str] = Field(default_factory=list)
+
+
+class SelectModelRequest(BaseModel):
+    """Request schema for selecting the active LM Studio model."""
+
+    model: str = Field(..., min_length=1, description="LM Studio model identifier")
+    load: bool = Field(default=True, description="Whether to preload model via LMS")
+
+
+class SelectModelResponse(BaseModel):
+    """Response schema for model selection."""
+
+    status: str = "success"
+    model: str
+    loaded: bool = False
+    ejected_models: List[str] = Field(default_factory=list)
+    message: str
+
+
+class EjectModelRequest(BaseModel):
+    """Request schema for model ejection."""
+
+    model: Optional[str] = Field(None, description="Model to unload, or null for all")
+
+
+class EjectModelResponse(BaseModel):
+    """Response schema for model ejection."""
+
+    status: str = "success"
+    ejected_models: List[str] = Field(default_factory=list)
+    message: str
+
+
 class HealthResponse(BaseModel):
     """Health check response schema."""
 
@@ -42,6 +95,8 @@ class HealthResponse(BaseModel):
     openvino_devices: List[str]
     lm_studio_connected: bool
     lm_studio_model: str
+    lm_studio_models: List[str] = Field(default_factory=list)
+    lm_studio_loaded_models: List[str] = Field(default_factory=list)
     tts_model: str
     tts_speakers: List[str]
 
@@ -62,6 +117,7 @@ class ChatRequest(BaseModel):
         None, description="Chat history"
     )
     session_id: str = Field(default="default", description="Session key for history isolation")
+    model: Optional[str] = Field(None, description="Optional model override")
 
 
 class ChatResponse(BaseModel):
@@ -86,7 +142,7 @@ class InteractResponse(BaseModel):
     assistant_text: str
     audio_base64: str
     sample_rate: int
-    metrics: Dict[str, float]
+    metrics: Dict[str, Any]
 
 
 class RecordRequest(BaseModel):
@@ -99,14 +155,18 @@ class RecordRequest(BaseModel):
     session_id: str = "default"
 
 
-def _metrics_dict(metrics) -> Dict[str, float]:
-    base = {
-        "stt_ms": metrics.stt_latency_ms,
-        "llm_ms": metrics.llm_latency_ms,
-        "tts_ms": metrics.tts_latency_ms,
+def _metrics_dict(metrics: Any) -> Dict[str, Any]:
+    if metrics is None:
+        return {}
+    if isinstance(metrics, dict):
+        return dict(metrics)
+    base: Dict[str, Any] = {
+        "stt_ms": getattr(metrics, "stt_latency_ms", 0.0),
+        "llm_ms": getattr(metrics, "llm_latency_ms", 0.0),
+        "tts_ms": getattr(metrics, "tts_latency_ms", 0.0),
         "tts_synth_ms": getattr(metrics, "tts_synth_ms", 0.0),
-        "ttfa_ms": metrics.ttfa_ms,
-        "total_ms": metrics.total_latency_ms,
+        "ttfa_ms": getattr(metrics, "ttfa_ms", 0.0),
+        "total_ms": getattr(metrics, "total_latency_ms", 0.0),
     }
     # Detailed T0..T8 + throughput/resource telemetry (best-effort).
     for attr, key in (
@@ -123,7 +183,9 @@ def _metrics_dict(metrics) -> Dict[str, float]:
         ("npu_status", "npu_status"),
     ):
         try:
-            base[key] = getattr(metrics, attr)
+            val = getattr(metrics, attr, None)
+            if val is not None:
+                base[key] = val
         except Exception:
             pass
     return base
@@ -141,6 +203,17 @@ async def get_health() -> HealthResponse:
     devices = pipeline.stt.get_openvino_devices()
     speakers = pipeline.tts.get_supported_speakers()
 
+    lm_models: List[str] = []
+    lm_loaded: List[str] = []
+    if lm_status:
+        try:
+            available = await pipeline.llm.list_available_models()
+            lm_models = [m["id"] for m in available]
+            lm_loaded = [m["id"] for m in available if m.get("loaded")]
+        except Exception:
+            lm_models = [pipeline.llm.model]
+            lm_loaded = [pipeline.llm.model]
+
     return HealthResponse(
         status="healthy",
         stt_model=pipeline.stt.model_id,
@@ -148,9 +221,82 @@ async def get_health() -> HealthResponse:
         openvino_devices=devices,
         lm_studio_connected=lm_status,
         lm_studio_model=pipeline.llm.model,
+        lm_studio_models=lm_models,
+        lm_studio_loaded_models=lm_loaded,
         tts_model=pipeline.tts.model_id,
         tts_speakers=speakers,
     )
+
+
+@router.get("/llm/models", response_model=ModelsResponse)
+@router.get("/models", response_model=ModelsResponse)
+async def get_llm_models() -> ModelsResponse:
+    """Returns all available and running LLM models from LM Studio."""
+    try:
+        models = await pipeline.llm.list_available_models()
+        loaded = [m["id"] for m in models if m.get("loaded")]
+        return ModelsResponse(
+            status="success",
+            current_model=pipeline.llm.model,
+            models=models,
+            loaded_models=loaded,
+        )
+    except Exception as exc:
+        logger.error("Failed to list LM Studio models: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to query LM Studio models: {exc}",
+        )
+
+
+@router.post("/llm/model", response_model=SelectModelResponse)
+@router.post("/models/select", response_model=SelectModelResponse)
+async def select_llm_model(req: SelectModelRequest) -> SelectModelResponse:
+    """Switches the active LM Studio LLM model used by the assistant.
+
+    Crucially ejects any previously loaded models from memory before loading
+    the requested model.
+    """
+    try:
+        res = await pipeline.set_model(req.model, load=req.load)
+        return SelectModelResponse(
+            status="success",
+            model=res["model"],
+            loaded=res.get("loaded", False),
+            ejected_models=res.get("ejected_models", []),
+            message=res.get("message", f"Switched to {req.model}"),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+    except Exception as exc:
+        logger.error("Failed to select model '%s': %s", req.model, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to switch model: {exc}",
+        )
+
+
+@router.post("/llm/eject", response_model=EjectModelResponse)
+@router.post("/llm/unload", response_model=EjectModelResponse)
+async def eject_llm_model(req: Optional[EjectModelRequest] = None) -> EjectModelResponse:
+    """Ejects loaded models from LM Studio memory to free RAM and VRAM."""
+    model_id = req.model if req else None
+    try:
+        res = await pipeline.eject_model(model_id)
+        return EjectModelResponse(
+            status="success",
+            ejected_models=res.get("ejected_models", []),
+            message=res.get("message", "Model(s) ejected successfully"),
+        )
+    except Exception as exc:
+        logger.error("Failed to eject models: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to eject model(s): {exc}",
+        )
 
 
 @router.get("/devices")
@@ -212,6 +358,9 @@ async def chat_completion(request: ChatRequest) -> ChatResponse:
         ChatResponse containing the generated assistant response.
     """
     try:
+        if request.model and request.model != pipeline.llm.model:
+            await pipeline.set_model(request.model, load=False)
+
         # Maintain multi-turn conversational context if history not explicitly passed.
         # Uses per-session isolated history to avoid cross-talk between clients.
         if request.history is not None:

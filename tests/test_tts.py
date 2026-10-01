@@ -33,8 +33,11 @@ def test_tts_npu_selects_openvino_backend() -> None:
     assert "Kokoro" in engine._ov_model_id
 
 
-def test_tts_cpu_keeps_torch_backend() -> None:
-    """Verifies CPU/GPU requests preserve the legacy PyTorch backend."""
+def test_tts_cpu_keeps_torch_backend(monkeypatch) -> None:
+    """Verifies CPU/GPU requests preserve the legacy PyTorch backend under auto."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "tts_backend", "auto")
     assert KokoroTTSEngine(device="cpu").backend == "torch"
     assert KokoroTTSEngine(device="gpu").backend == "torch"
     assert KokoroTTSEngine(device="NPU").backend == "openvino"
