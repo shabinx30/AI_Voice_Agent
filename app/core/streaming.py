@@ -171,6 +171,8 @@ async def run_streaming_pipeline(
             except asyncio.QueueFull:
                 await asyncio.sleep(0.01)
 
+    raw_tokens: List[str] = []
+
     async def _producer() -> None:
         tracker.mark("t3_llm_send")
         state["llm_start"] = time.perf_counter()
@@ -183,6 +185,7 @@ async def run_streaming_pipeline(
                         break
                     if not token:
                         continue
+                    raw_tokens.append(token)
                     if not state["first_token_seen"]:
                         state["first_token_seen"] = True
                         tracker.mark("t4_first_token")
@@ -432,7 +435,10 @@ async def run_streaming_pipeline(
         metrics.total_latency_ms = round((time.perf_counter() - pipeline_start) * 1000, 2)
         _fill_telemetry(pipeline, tracker, metrics, stream_player)
         pipeline.last_metrics = metrics
-        partial = " ".join(ordered_texts[i] for i in sorted(ordered_texts)).strip()
+        partial = (
+            "".join(raw_tokens).strip()
+            or " ".join(ordered_texts[i] for i in sorted(ordered_texts)).strip()
+        )
         return partial, b"", state["tts_sr"], metrics
 
     if not ordered_texts:
@@ -450,9 +456,14 @@ async def run_streaming_pipeline(
         if tracker.stages.t8_speaker_start == 0.0:
             tracker.mark("t8_speaker_start")
 
-    # Assistant text preserves readable order.
-    assistant_reply = " ".join(
-        ordered_texts[i] for i in sorted(ordered_texts)).strip()
+    # Assistant text preserves readable order, paragraph breaks, and formatting from the LLM.
+    full_text = "".join(raw_tokens).strip()
+    if full_text:
+        assistant_reply = full_text
+    else:
+        assistant_reply = " ".join(
+            ordered_texts[i] for i in sorted(ordered_texts)
+        ).strip()
     await pipeline._append_history(session_id, prompt, assistant_reply)
 
     if all_waveforms:

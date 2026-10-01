@@ -604,6 +604,8 @@ body {
   font-size: 0.95rem;
   line-height: 1.55;
   color: #000000;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .audio-controls {

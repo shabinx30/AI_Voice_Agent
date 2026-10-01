@@ -46,6 +46,7 @@ export default function NexusVoiceApp() {
   // Chat conversation state
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingTokenBuffer, setStreamingTokenBuffer] = useState<string>("");
+  const streamingTokenBufferRef = useRef<string>("");
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [inputText, setInputText] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -353,6 +354,7 @@ export default function NexusVoiceApp() {
 
       if (msg.type === "token") {
         setIsStreaming(true);
+        streamingTokenBufferRef.current += (msg.text || "");
         setStreamingTokenBuffer((prev) => prev + (msg.text || ""));
         return;
       }
@@ -368,6 +370,8 @@ export default function NexusVoiceApp() {
       if (msg.type === "result") {
         setIsStreaming(false);
         setIsProcessing(false);
+        const streamedText = streamingTokenBufferRef.current;
+        streamingTokenBufferRef.current = "";
         setStreamingTokenBuffer("");
 
         if (msg.metrics) {
@@ -382,9 +386,17 @@ export default function NexusVoiceApp() {
             (m) => m.role === "assistant"
           );
           if (lastAssistantIdx !== -1) {
+            let finalText = msg.assistant_text || updated[lastAssistantIdx].text;
+            if (
+              streamedText &&
+              streamedText.includes("\n") &&
+              (!finalText || !finalText.includes("\n"))
+            ) {
+              finalText = streamedText;
+            }
             updated[lastAssistantIdx] = {
               ...updated[lastAssistantIdx],
-              text: msg.assistant_text || updated[lastAssistantIdx].text,
+              text: finalText,
               audioBase64: msg.audio_base64,
               isStreaming: false,
             };
@@ -404,6 +416,7 @@ export default function NexusVoiceApp() {
       if (msg.type === "error") {
         setIsStreaming(false);
         setIsProcessing(false);
+        streamingTokenBufferRef.current = "";
         setStreamingTokenBuffer("");
         setStatusText(`Error: ${msg.message}`);
 
@@ -598,6 +611,8 @@ export default function NexusVoiceApp() {
 
     setIsProcessing(true);
     setStatusText("Transcribing speech with OpenVINO Whisper Base INT8...");
+    streamingTokenBufferRef.current = "";
+    setStreamingTokenBuffer("");
 
     // Create user placeholder and assistant placeholder
     const userMsgId = `user-${Date.now()}`;
@@ -741,6 +756,8 @@ export default function NexusVoiceApp() {
     setInputText("");
     setIsProcessing(true);
     setStatusText("Streaming reply and synthesizing speech...");
+    streamingTokenBufferRef.current = "";
+    setStreamingTokenBuffer("");
 
     audioQueueRef.current?.reset();
 

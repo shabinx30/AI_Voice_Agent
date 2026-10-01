@@ -301,3 +301,41 @@ def test_pipeline_tts_device_management() -> None:
     mock_tts.set_device.assert_called_once_with("npu")
 
 
+def test_pipeline_preserves_paragraphs_in_assistant_text() -> None:
+    """Verifies that multi-paragraph LLM responses retain their newlines/paragraphs upon completion."""
+    async def _test() -> None:
+        mock_stt = MagicMock()
+        mock_llm = MagicMock()
+        mock_tts = MagicMock()
+
+        async def fake_token_stream(*args, **kwargs):
+            yield "Paragraph one line.\n\n"
+            yield "Paragraph two line.\n\n"
+            yield "Paragraph three line."
+
+        mock_llm.stream_response = fake_token_stream
+
+        sample_rate = 24000
+        test_waveform = np.zeros(sample_rate, dtype=np.float32)
+        mock_tts.sample_rate = sample_rate
+        mock_tts.synthesize = MagicMock(return_value=(test_waveform, sample_rate))
+
+        pipeline = AssistantPipeline(
+            stt_engine=mock_stt,
+            llm_client=mock_llm,
+            tts_engine=mock_tts,
+        )
+
+        res = await pipeline.process_text_prompt(
+            prompt="Tell me about Docker",
+            play_audio=False,
+        )
+
+        expected = "Paragraph one line.\n\nParagraph two line.\n\nParagraph three line."
+        assert res.assistant_text == expected
+        assert "\n\n" in res.assistant_text
+
+    asyncio.run(_test())
+
+
+
