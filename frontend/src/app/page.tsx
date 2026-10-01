@@ -792,11 +792,7 @@ export default function NexusVoiceApp() {
   };
 
   return (
-    <div className="relative w-screen h-screen max-h-screen overflow-hidden p-3 md:p-4.5 flex gap-4 bg-[#07090e]">
-      {/* Dynamic Glowing Ambient Backdrops */}
-      <div className="ambient-glow glow-1" />
-      <div className="ambient-glow glow-2" />
-      <div className="ambient-glow glow-3" />
+    <div className="relative w-screen h-screen max-h-screen overflow-hidden p-3 md:p-4.5 flex gap-4 bg-white">
 
       {/* Sidebar Component */}
       <Sidebar

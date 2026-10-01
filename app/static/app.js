@@ -517,7 +517,7 @@ function drawIdleVisualizer() {
 
   canvasCtx.clearRect(0, 0, width, height);
   canvasCtx.lineWidth = 2;
-  canvasCtx.strokeStyle = 'rgba(99, 102, 241, 0.4)';
+  canvasCtx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
   canvasCtx.beginPath();
 
   const sliceWidth = width / 60;
@@ -548,12 +548,7 @@ function drawLiveWaveform() {
 
   canvasCtx.clearRect(0, 0, width, height);
   canvasCtx.lineWidth = 2.5;
-
-  const gradient = canvasCtx.createLinearGradient(0, 0, width, 0);
-  gradient.addColorStop(0, '#f43f5e');
-  gradient.addColorStop(0.5, '#6366f1');
-  gradient.addColorStop(1, '#06b6d4');
-  canvasCtx.strokeStyle = gradient;
+  canvasCtx.strokeStyle = '#dc2626';
 
   canvasCtx.beginPath();
   const sliceWidth = width / bufferLength;

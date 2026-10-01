@@ -30,24 +30,24 @@ export function ChatArea({
     <section
       ref={scrollRef}
       id="chat-messages"
-      className="glass-panel flex-1 min-h-0 overflow-y-auto p-4 md:p-6 flex flex-col gap-4 scroll-smooth"
+      className="glass-panel flex-1 min-h-0 overflow-y-auto p-4 md:p-6 flex flex-col gap-4 scroll-smooth bg-white border border-neutral-200 shadow-xs"
     >
       {/* Welcome Message Card */}
       <div className="flex items-start gap-3.5 max-w-[85%] self-start animate-in fade-in slide-in-from-bottom-2 duration-300">
-        <div className="w-9 h-9 rounded-xl bg-linear-to-br from-indigo-500 to-cyan-500 flex items-center justify-center text-white shrink-0 shadow-md shadow-indigo-500/20">
+        <div className="w-9 h-9 rounded-xl bg-black flex items-center justify-center text-white shrink-0 shadow-xs">
           <Bot className="w-5 h-5" />
         </div>
-        <div className="rounded-2xl p-4 bg-white/4 border border-white/8 shadow-lg shadow-black/20">
-          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1.5 flex items-center gap-1.5">
-            <Sparkles className="w-3 h-3 text-cyan-400" />
+        <div className="rounded-2xl p-4 bg-neutral-50 border border-neutral-200 shadow-xs text-black">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5 flex items-center gap-1.5">
+            <Sparkles className="w-3 h-3 text-black" />
             NexusVoice Assistant
           </div>
-          <div className="text-sm leading-relaxed text-slate-200">
+          <div className="text-sm leading-relaxed text-black">
             Hello! I am your personal voice assistant. Speak by clicking the
             microphone button or type below. Your voice is transcribed locally
-            via <strong className="text-cyan-400">OpenVINO Whisper Base INT8</strong>,
-            processed by your <strong className="text-indigo-400">LM Studio LLM</strong>,
-            and spoken back with <strong className="text-purple-400">Kokoro-82M TTS</strong>!
+            via <strong className="text-black font-semibold">OpenVINO Whisper Base INT8</strong>,
+            processed by your <strong className="text-black font-semibold">LM Studio LLM</strong>,
+            and spoken back with <strong className="text-black font-semibold">Kokoro-82M TTS</strong>!
           </div>
         </div>
       </div>
@@ -67,10 +67,10 @@ export function ChatArea({
           >
             {/* Avatar */}
             <div
-              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-md ${
+              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-xs ${
                 isUser
-                  ? "bg-slate-700/60 text-slate-200 border border-white/10"
-                  : "bg-linear-to-br from-indigo-500 to-cyan-500 text-white shadow-indigo-500/20"
+                  ? "bg-neutral-200 text-black border border-neutral-300"
+                  : "bg-black text-white"
               }`}
             >
               {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
@@ -80,15 +80,15 @@ export function ChatArea({
             <div
               className={`rounded-2xl p-4 transition-all duration-200 ${
                 isUser
-                  ? "bg-linear-to-br from-indigo-600/30 to-indigo-500/20 border border-indigo-500/35 text-white"
-                  : "bg-white/4 border border-white/8 text-slate-200 shadow-lg shadow-black/20"
+                  ? "bg-neutral-100 border border-neutral-300 text-black shadow-xs"
+                  : "bg-white border border-neutral-200 text-black shadow-xs"
               }`}
             >
-              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-neutral-500 mb-1">
                 {isUser ? "You" : "NexusVoice"}
               </div>
 
-              <div className="text-sm leading-relaxed whitespace-pre-wrap wrap-break-word">
+              <div className="text-sm leading-relaxed whitespace-pre-wrap wrap-break-word text-black">
                 {msg.text ? (
                   msg.text
                 ) : isLastAssistant ? (
@@ -98,28 +98,28 @@ export function ChatArea({
                       <span className="stream-caret" />
                     </span>
                   ) : (
-                    <span className="text-slate-400 italic flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping inline-block" />
+                    <span className="text-neutral-500 italic flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-black animate-ping inline-block" />
                       Thinking...
                     </span>
                   )
                 ) : (
-                  <span className="text-slate-400 italic">...</span>
+                  <span className="text-neutral-500 italic">...</span>
                 )}
               </div>
 
               {/* Audio Controls for Completed Assistant Reply */}
               {!isUser && msg.audioBase64 && !isLastAssistant && (
-                <div className="mt-3 pt-2.5 border-t border-white/6 flex items-center gap-2">
+                <div className="mt-3 pt-2.5 border-t border-neutral-200 flex items-center gap-2">
                   <button
                     onClick={() => onReplayAudio(msg.audioBase64!)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-300 text-xs font-medium transition-colors"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 border border-neutral-300 text-black text-xs font-medium transition-colors cursor-pointer"
                   >
-                    <Play className="w-3.5 h-3.5 fill-current" />
+                    <Play className="w-3.5 h-3.5 fill-current text-black" />
                     <span>Replay Full Audio</span>
                   </button>
-                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
-                    <Volume2 className="w-3 h-3 text-slate-400" />
+                  <span className="text-[11px] text-neutral-500 flex items-center gap-1">
+                    <Volume2 className="w-3 h-3 text-neutral-500" />
                     Kokoro 24kHz
                   </span>
                 </div>

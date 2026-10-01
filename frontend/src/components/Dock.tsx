@@ -52,17 +52,13 @@ export function Dock({
       ctx.clearRect(0, 0, width, height);
 
       if (isRecording && analyserNode) {
-        // Live audio waveform from microphone
+        // Live audio waveform from microphone - preserved red
         const bufferLength = analyserNode.frequencyBinCount;
         const dataArray = new Uint8Array(bufferLength);
         analyserNode.getByteTimeDomainData(dataArray);
 
         ctx.lineWidth = 2.5;
-        const gradient = ctx.createLinearGradient(0, 0, width, 0);
-        gradient.addColorStop(0, "#f43f5e");
-        gradient.addColorStop(0.5, "#6366f1");
-        gradient.addColorStop(1, "#06b6d4");
-        ctx.strokeStyle = gradient;
+        ctx.strokeStyle = "#dc2626";
 
         ctx.beginPath();
         const sliceWidth = width / bufferLength;
@@ -79,9 +75,9 @@ export function Dock({
         ctx.lineTo(width, height / 2);
         ctx.stroke();
       } else {
-        // Idle gentle harmonic sine wave
+        // Idle gentle harmonic sine wave - monochrome
         ctx.lineWidth = 2;
-        ctx.strokeStyle = "rgba(99, 102, 241, 0.45)";
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.35)";
         ctx.beginPath();
 
         const sliceWidth = width / 60;
@@ -116,9 +112,9 @@ export function Dock({
   };
 
   return (
-    <footer className="glass-panel shrink-0 p-4 md:p-5 flex flex-col gap-3 shadow-2xl">
+    <footer className="glass-panel shrink-0 p-4 md:p-5 flex flex-col gap-3 shadow-xs bg-white border border-neutral-200">
       {/* Audio Waveform & Timer Wrapper */}
-      <div className="flex items-center justify-between w-full h-11 bg-black/40 rounded-xl px-4 border border-white/6">
+      <div className="flex items-center justify-between w-full h-11 bg-neutral-50 rounded-xl px-4 border border-neutral-200">
         <canvas
           ref={canvasRef}
           width={650}
@@ -127,8 +123,8 @@ export function Dock({
         />
 
         {isRecording && (
-          <div className="font-mono text-xs text-rose-400 font-semibold ml-3 flex items-center gap-1.5 shrink-0 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20">
-            <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+          <div className="font-mono text-xs text-rose-700 font-semibold ml-3 flex items-center gap-1.5 shrink-0 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+            <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse" />
             {formatTime(recordingSeconds)}
           </div>
         )}
@@ -142,10 +138,10 @@ export function Dock({
           disabled={isProcessing}
           aria-label={isRecording ? "Stop recording" : "Start recording"}
           title={isRecording ? "Click to stop recording" : "Click to record voice"}
-          className={`relative w-13 h-13 rounded-full flex items-center justify-center shrink-0 text-white transition-all duration-300 shadow-xl cursor-pointer disabled:opacity-50 ${
+          className={`relative w-13 h-13 rounded-full flex items-center justify-center shrink-0 text-white transition-all duration-200 shadow-md cursor-pointer disabled:opacity-50 ${
             isRecording
-              ? "bg-linear-to-br from-rose-500 to-rose-700 mic-recording-pulse"
-              : "bg-linear-to-br from-indigo-500 via-indigo-600 to-indigo-700 hover:scale-105 shadow-indigo-500/35 hover:shadow-indigo-500/50"
+              ? "bg-red-600 hover:bg-red-700 mic-recording-pulse shadow-red-500/30"
+              : "bg-black hover:bg-neutral-800 hover:scale-105 shadow-black/20"
           }`}
         >
           {isRecording ? (
@@ -168,14 +164,14 @@ export function Dock({
                 : "Type a message or click mic to talk..."
             }
             disabled={isRecording}
-            className="w-full h-12 bg-white/5 border border-white/10 focus:border-indigo-500/60 rounded-full pl-5 pr-13 text-sm text-slate-100 placeholder:text-slate-400 outline-none transition-all focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50"
+            className="w-full h-12 bg-white border border-neutral-300 focus:border-black rounded-full pl-5 pr-13 text-sm text-black placeholder:text-neutral-400 outline-none transition-all focus:ring-2 focus:ring-black/10 disabled:opacity-50"
           />
 
           <button
             onClick={onSubmitText}
             disabled={!inputText.trim() || isProcessing || isRecording}
             title="Send Message"
-            className="absolute right-1.5 w-9 h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:hover:bg-indigo-600 flex items-center justify-center text-white transition-all cursor-pointer shadow-md shadow-indigo-600/30"
+            className="absolute right-1.5 w-9 h-9 rounded-full bg-black hover:bg-neutral-800 disabled:opacity-30 disabled:hover:bg-black flex items-center justify-center text-white transition-all cursor-pointer shadow-xs"
           >
             <Send className="w-4 h-4" />
           </button>

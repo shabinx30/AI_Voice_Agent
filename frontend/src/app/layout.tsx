@@ -31,9 +31,9 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${plusJakarta.variable} ${jetbrainsMono.variable} dark`}
+      className={`${plusJakarta.variable} ${jetbrainsMono.variable}`}
     >
-      <body className="font-sans antialiased bg-[#07090e] text-[#f8fafc] selection:bg-indigo-500/30 selection:text-white">
+      <body className="font-sans antialiased bg-white text-black selection:bg-neutral-200 selection:text-black">
         {children}
       </body>
     </html>
