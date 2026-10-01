@@ -347,6 +347,22 @@ def test_set_tts_device_endpoint() -> None:
         assert data["device"] == "npu"
         assert data["effective_device"] == "npu"
 
+    mock_resp_full = {
+        "status": "success",
+        "device": "npu_only",
+        "effective_device": "NPU (Full)",
+        "backend": "openvino",
+        "message": "TTS device set to npu_only",
+    }
+    with patch.object(routes.pipeline, "set_tts_device", return_value=mock_resp_full):
+        response = client.post("/api/tts/device", json={"device": "npu_only"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["device"] == "npu_only"
+        assert data["effective_device"] == "NPU (Full)"
+
+
 
 def test_set_tts_device_invalid_device() -> None:
     """Tests POST /api/tts/device returns 400 for unsupported hardware device."""

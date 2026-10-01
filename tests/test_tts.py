@@ -75,6 +75,12 @@ def test_tts_set_device_cpu_npu() -> None:
     assert engine.device == "npu"
     assert engine.backend == "openvino"
 
+    # Switch to NPU Only (all stages)
+    res_npu_only = engine.set_device("npu_only")
+    assert res_npu_only["device"] == "npu_only"
+    assert engine.device == "npu_only"
+    assert engine.backend == "openvino"
+
     # Switch back to CPU
     res_cpu = engine.set_device("cpu")
     assert res_cpu["device"] == "cpu"

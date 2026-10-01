@@ -100,6 +100,7 @@ class KokoroTTSEngine:
         # the CPU fallback stay fast; first-use NPU compilation is one-time
         # and cached on disk afterwards.
         self._npu_encoder = None
+        self._npu_encoders: Dict[bool, Any] = {}
         self._npu_attempted: bool = False
 
         self._pipeline = None
@@ -278,20 +279,24 @@ class KokoroTTSEngine:
 
         available_devices = ["cpu"]
         if "NPU" in get_available_devices():
-            available_devices.append("npu")
+            available_devices.extend(["npu", "npu_only"])
+
+        target_dev = str(self.device).lower()
+        is_npu_full = (target_dev == "npu_only") or bool(getattr(settings, "tts_npu_full", False))
 
         return {
-            "device": str(self.device).lower(),
-            "effective_device": self.effective_device or ("CPU" if str(self.device).lower() == "cpu" else "NPU"),
+            "device": target_dev,
+            "effective_device": self.effective_device or ("CPU" if target_dev == "cpu" else "NPU"),
             "backend": self.backend,
             "available_devices": available_devices,
+            "npu_full": is_npu_full,
         }
 
     def set_device(self, device: str) -> Dict[str, Any]:
-        """Dynamically switches the Kokoro TTS execution device (cpu or npu).
+        """Dynamically switches the Kokoro TTS execution device (cpu, npu, or npu_only).
 
         Args:
-            device: Target processing unit ('cpu' or 'npu', case-insensitive).
+            device: Target processing unit ('cpu', 'npu', or 'npu_only', case-insensitive).
 
         Returns:
             Dict describing the active device status.
@@ -300,31 +305,36 @@ class KokoroTTSEngine:
             ValueError: If an unsupported device is specified.
         """
         target = str(device or "").strip().lower()
-        if target not in ("cpu", "npu"):
-            raise ValueError(f"Unsupported TTS device '{device}'. Choose 'cpu' or 'npu'.")
+        if target in ("npu-only", "npu_full", "full_npu"):
+            target = "npu_only"
+
+        if target not in ("cpu", "npu", "npu_only"):
+            raise ValueError(f"Unsupported TTS device '{device}'. Choose 'cpu', 'npu', or 'npu_only'.")
 
         if target == str(self.device).lower() and self._is_loaded:
             return self.get_device_info()
 
         logger.info("Switching Kokoro TTS processing unit from '%s' to '%s'...", self.device, target)
         self.device = target
-        settings.tts_device = target
 
-        if target == "npu":
+        if target in ("npu", "npu_only"):
             self.backend = "openvino"
+            is_full = (target == "npu_only")
+            settings.tts_device = "npu"
+            settings.tts_npu_full = is_full
             if not self._is_loaded or self._ov_model is None:
                 self.load_model()
-            if self._npu_encoder is None:
-                self._npu_attempted = False
-                try:
-                    self._get_npu_encoder()
-                except Exception as exc:
-                    logger.warning("Failed to initialize NPU encoder during set_device: %s", exc)
-            if self._npu_encoder and self._npu_encoder.npu_stage_count > 0:
-                self.effective_device = "NPU+CPU"
+            encoder = self._get_npu_encoder(full_npu=is_full)
+            if encoder and encoder.npu_stage_count > 0:
+                if is_full and encoder.npu_stage_count == 3:
+                    self.effective_device = "NPU (Full)"
+                else:
+                    self.effective_device = "NPU+CPU"
             else:
                 self.effective_device = "CPU"
         else:
+            self.device = "cpu"
+            settings.tts_device = "cpu"
             self.effective_device = "CPU"
             if self.backend == "openvino":
                 if not self._is_loaded or self._ov_model is None:
@@ -340,50 +350,62 @@ class KokoroTTSEngine:
         )
         return self.get_device_info()
 
-    def _get_npu_encoder(self):
+    def _get_npu_encoder(self, full_npu: Optional[bool] = None):
         """Returns the static NPU encoder, initializing it lazily on first use.
 
-        Only attempted when the requested device is NPU. First initialization
-        exports replica graphs (seconds) and compiles stages on the NPU
-        (minutes, one-time — compiler cache makes later loads fast).
+        Args:
+            full_npu: When True, compiles all 3 static stages (albert, prosody_body,
+                text_encoder) on NPU. When False, keeps albert on CPU for maximum
+                speech correlation (hybrid mode). Defaults to current configuration.
 
         Returns:
             Configured KokoroNPUEncoder, or None when NPU is unavailable or
             was not requested.
         """
-        if self._npu_encoder is not None:
+        target_device = str(self.device or "cpu").lower()
+        if target_device not in ("npu", "npu_only"):
+            return None
+
+        if full_npu is None:
+            full_npu = (target_device == "npu_only") or bool(getattr(settings, "tts_npu_full", False))
+
+        if full_npu in self._npu_encoders:
+            self._npu_encoder = self._npu_encoders[full_npu]
             return self._npu_encoder
-        if str(self.device or "cpu").upper() != "NPU":
-            return None
-        if self._npu_attempted:
-            return None
-        self._npu_attempted = True
+
         try:
             from app.core.tts_npu import KokoroNPUEncoder
 
             logger.info(
-                "Initializing Kokoro static NPU encoder (one-time NPU "
-                "compilation; subsequent loads reuse the on-disk cache)..."
+                "Initializing Kokoro static NPU encoder (full_npu=%s, one-time NPU "
+                "compilation; subsequent loads reuse the on-disk cache)...",
+                full_npu,
             )
-            full_npu = bool(getattr(settings, "tts_npu_full", False))
             encoder = KokoroNPUEncoder(
                 cpu_stages=frozenset() if full_npu else None,
                 turbo=self._resolve_turbo(),
             )
             encoder.load(preferred_device="NPU")
+            self._npu_encoders[full_npu] = encoder
             self._npu_encoder = encoder
             n_npu = encoder.npu_stage_count
-            # Encoder stages that land on NPU run there every synthesis;
-            # the rest (including the torch vocoder tail) stays on CPU.
-            self.effective_device = "NPU+CPU" if n_npu > 0 else "CPU"
+
             if n_npu == 0:
+                self.effective_device = "CPU"
                 logger.warning(
                     "Kokoro NPU requested but 0 stages landed on NPU "
-                    "(%s); running on CPU. This is an explicit fallback, "
-                    "not silent: check per-stage compile warnings above.",
+                    "(%s); running on CPU.",
+                    encoder.stage_devices,
+                )
+            elif full_npu and n_npu == 3:
+                self.effective_device = "NPU (Full)"
+                logger.info(
+                    "Kokoro full NPU encoder ready (all %d stages on NPU: %s).",
+                    n_npu,
                     encoder.stage_devices,
                 )
             else:
+                self.effective_device = "NPU+CPU"
                 logger.info(
                     "Kokoro hybrid NPU encoder ready (%d stages on NPU: %s).",
                     n_npu,

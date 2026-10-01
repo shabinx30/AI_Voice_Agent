@@ -77,12 +77,18 @@ export function Topbar({
         {ttsDevice && (
           <button
             type="button"
-            onClick={() => onSelectTTSDevice?.(ttsDevice.toLowerCase() === "cpu" ? "npu" : "cpu")}
+            onClick={() => {
+              const dev = ttsDevice.toLowerCase();
+              const next = dev === "cpu" ? "npu" : dev === "npu" ? "npu_only" : "cpu";
+              onSelectTTSDevice?.(next);
+            }}
             className="px-2 py-1 rounded-md bg-neutral-100 hover:bg-neutral-200 border border-neutral-300 text-black font-semibold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
-            title={`Kokoro TTS Processing Unit: ${ttsDevice.toUpperCase()}. Click to switch to ${ttsDevice.toLowerCase() === "cpu" ? "NPU" : "CPU"}.`}
+            title={`Kokoro TTS Processing Unit: ${ttsDevice.toUpperCase()}. Click to cycle (CPU -> NPU Hybrid -> NPU Only).`}
           >
             <span className="text-neutral-500 mr-0.5">UNIT:</span>
-            <span className="text-black font-bold uppercase">{ttsDevice}</span>
+            <span className="text-black font-bold uppercase">
+              {ttsDevice.toLowerCase() === "npu_only" ? "NPU (FULL)" : ttsDevice}
+            </span>
           </button>
         )}
 

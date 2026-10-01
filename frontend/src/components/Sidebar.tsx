@@ -225,21 +225,23 @@ export function Sidebar({
                 </span>
               ) : (
                 <span className="text-[10px] font-mono text-black font-semibold">
-                  {selectedTTSDevice.toLowerCase() === "npu"
-                    ? "Intel AI Boost"
+                  {selectedTTSDevice.toLowerCase() === "npu_only"
+                    ? "NPU Only (3/3 Stages)"
+                    : selectedTTSDevice.toLowerCase() === "npu"
+                    ? "NPU (Hybrid)"
                     : "Host CPU"}
                 </span>
               )}
             </div>
 
             {/* Segmented Control Buttons */}
-            <div className="grid grid-cols-2 gap-1.5 p-1 bg-neutral-100 rounded-lg border border-neutral-200">
+            <div className="grid grid-cols-3 gap-1 p-1 bg-neutral-100 rounded-lg border border-neutral-200">
               <button
                 type="button"
                 id="tts-unit-cpu-btn"
                 onClick={() => onSelectTTSDevice("cpu")}
                 disabled={isSwitchingTTSDevice}
-                className={`flex flex-col items-center justify-center py-1.5 px-2 rounded-md text-xs font-semibold transition-all duration-200 cursor-pointer disabled:opacity-50 ${
+                className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-md text-xs font-semibold transition-all duration-200 cursor-pointer disabled:opacity-50 ${
                   selectedTTSDevice.toLowerCase() === "cpu"
                     ? "bg-black text-white shadow-xs"
                     : "bg-transparent text-neutral-600 hover:text-black hover:bg-white"
@@ -247,7 +249,7 @@ export function Sidebar({
               >
                 <span>CPU</span>
                 <span
-                  className={`text-[9px] font-normal tracking-tight ${
+                  className={`text-[8.5px] font-normal tracking-tight ${
                     selectedTTSDevice.toLowerCase() === "cpu"
                       ? "text-neutral-300"
                       : "text-neutral-400"
@@ -262,7 +264,7 @@ export function Sidebar({
                 id="tts-unit-npu-btn"
                 onClick={() => onSelectTTSDevice("npu")}
                 disabled={isSwitchingTTSDevice}
-                className={`flex flex-col items-center justify-center py-1.5 px-2 rounded-md text-xs font-semibold transition-all duration-200 cursor-pointer disabled:opacity-50 ${
+                className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-md text-xs font-semibold transition-all duration-200 cursor-pointer disabled:opacity-50 ${
                   selectedTTSDevice.toLowerCase() === "npu"
                     ? "bg-black text-white shadow-xs"
                     : "bg-transparent text-neutral-600 hover:text-black hover:bg-white"
@@ -270,7 +272,7 @@ export function Sidebar({
               >
                 <span className="flex items-center gap-1">
                   <Zap
-                    className={`w-3 h-3 ${
+                    className={`w-2.5 h-2.5 ${
                       selectedTTSDevice.toLowerCase() === "npu"
                         ? "text-amber-300 fill-amber-300"
                         : "text-neutral-500"
@@ -279,16 +281,55 @@ export function Sidebar({
                   <span>NPU</span>
                 </span>
                 <span
-                  className={`text-[9px] font-normal tracking-tight ${
+                  className={`text-[8.5px] font-normal tracking-tight ${
                     selectedTTSDevice.toLowerCase() === "npu"
                       ? "text-neutral-300"
                       : "text-neutral-400"
                   }`}
                 >
-                  Intel AI Boost
+                  Hybrid
+                </span>
+              </button>
+
+              <button
+                type="button"
+                id="tts-unit-npu-only-btn"
+                onClick={() => onSelectTTSDevice("npu_only")}
+                disabled={isSwitchingTTSDevice}
+                className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-md text-xs font-semibold transition-all duration-200 cursor-pointer disabled:opacity-50 ${
+                  selectedTTSDevice.toLowerCase() === "npu_only"
+                    ? "bg-black text-white shadow-xs"
+                    : "bg-transparent text-neutral-600 hover:text-black hover:bg-white"
+                }`}
+              >
+                <span className="flex items-center gap-1">
+                  <Zap
+                    className={`w-2.5 h-2.5 ${
+                      selectedTTSDevice.toLowerCase() === "npu_only"
+                        ? "text-amber-300 fill-amber-300"
+                        : "text-neutral-500"
+                    }`}
+                  />
+                  <span>NPU Only</span>
+                </span>
+                <span
+                  className={`text-[8.5px] font-normal tracking-tight ${
+                    selectedTTSDevice.toLowerCase() === "npu_only"
+                      ? "text-neutral-300"
+                      : "text-neutral-400"
+                  }`}
+                >
+                  Full NPU
                 </span>
               </button>
             </div>
+            <span className="text-[10px] text-neutral-500 px-0.5">
+              {selectedTTSDevice.toLowerCase() === "npu_only"
+                ? "All static neural encoder stages running on Intel AI Boost NPU."
+                : selectedTTSDevice.toLowerCase() === "npu"
+                ? "Intel AI Boost NPU + CPU ALBERT for optimal speech fidelity."
+                : "Standard multi-threaded host CPU speech synthesis."}
+            </span>
           </div>
         </div>
       </div>

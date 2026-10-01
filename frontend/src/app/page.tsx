@@ -218,7 +218,12 @@ export default function NexusVoiceApp() {
       const target = device.toLowerCase();
       if (!target || isSwitchingTTSDevice) return;
       setIsSwitchingTTSDevice(true);
-      const targetLabel = target === "npu" ? "NPU (Intel AI Boost)" : "CPU";
+      const targetLabel =
+        target === "npu_only"
+          ? "NPU Only (All Stages)"
+          : target === "npu"
+          ? "NPU (Hybrid)"
+          : "CPU";
       setStatusText(`Switching Kokoro TTS processing unit to ${targetLabel}...`);
       setSelectedTTSDevice(target);
 
@@ -229,7 +234,15 @@ export default function NexusVoiceApp() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ device: target }),
         });
-        if (!res.ok) throw new Error("Failed to switch TTS processing unit");
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          const errMsg =
+            errData.detail ||
+            (res.status === 404
+              ? "Backend route not found (please restart the backend server)"
+              : `Server returned status ${res.status}`);
+          throw new Error(errMsg);
+        }
         const data = await res.json();
         if (data.effective_device) {
           setTtsEffectiveDevice(data.effective_device);

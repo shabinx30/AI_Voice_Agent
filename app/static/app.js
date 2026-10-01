@@ -42,6 +42,7 @@ const ttsUnitHeaderBadge = document.getElementById('tts-unit-header-badge');
 const ttsUnitBadge = document.getElementById('tts-unit-badge');
 const staticTtsCpuBtn = document.getElementById('static-tts-cpu-btn');
 const staticTtsNpuBtn = document.getElementById('static-tts-npu-btn');
+const staticTtsNpuOnlyBtn = document.getElementById('static-tts-npu-only-btn');
 let activeTtsDevice = 'cpu';
 const systemStatusText = document.getElementById('system-status-text');
 
@@ -1177,15 +1178,25 @@ if (refreshModelsBtn) refreshModelsBtn.addEventListener('click', fetchAvailableM
 if (ejectModelBtn) ejectModelBtn.addEventListener('click', handleEjectModel);
 
 function updateTtsDeviceUI(device, effective) {
-  const isNpu = String(device).toLowerCase() === 'npu';
-  activeTtsDevice = isNpu ? 'npu' : 'cpu';
-  if (staticTtsCpuBtn) staticTtsCpuBtn.classList.toggle('active', !isNpu);
-  if (staticTtsNpuBtn) staticTtsNpuBtn.classList.toggle('active', isNpu);
-  const displayLabel = isNpu ? 'NPU (Intel AI Boost)' : 'Host CPU';
+  const d = String(device || 'cpu').toLowerCase();
+  activeTtsDevice = d;
+  if (staticTtsCpuBtn) staticTtsCpuBtn.classList.toggle('active', d === 'cpu');
+  if (staticTtsNpuBtn) staticTtsNpuBtn.classList.toggle('active', d === 'npu');
+  if (staticTtsNpuOnlyBtn) staticTtsNpuOnlyBtn.classList.toggle('active', d === 'npu_only');
+
+  let displayLabel = 'Host CPU';
+  let badgeLabel = 'CPU';
+  if (d === 'npu_only') {
+    displayLabel = 'NPU Only (3/3 Stages)';
+    badgeLabel = 'NPU (FULL)';
+  } else if (d === 'npu') {
+    displayLabel = 'NPU (Intel AI Boost Hybrid)';
+    badgeLabel = 'NPU';
+  }
   if (ttsDeviceName) ttsDeviceName.textContent = displayLabel;
-  const badgeText = effective || activeTtsDevice.toUpperCase();
+  const badgeText = effective || badgeLabel;
   if (ttsUnitHeaderBadge) ttsUnitHeaderBadge.textContent = badgeText;
-  if (ttsUnitBadge) ttsUnitBadge.textContent = activeTtsDevice.toUpperCase();
+  if (ttsUnitBadge) ttsUnitBadge.textContent = badgeLabel;
 }
 
 async function handleTtsDeviceSelect(targetDevice) {
@@ -1216,6 +1227,7 @@ async function handleTtsDeviceSelect(targetDevice) {
 
 if (staticTtsCpuBtn) staticTtsCpuBtn.addEventListener('click', () => handleTtsDeviceSelect('cpu'));
 if (staticTtsNpuBtn) staticTtsNpuBtn.addEventListener('click', () => handleTtsDeviceSelect('npu'));
+if (staticTtsNpuOnlyBtn) staticTtsNpuOnlyBtn.addEventListener('click', () => handleTtsDeviceSelect('npu_only'));
 
 window.addEventListener('DOMContentLoaded', () => {
   drawIdleVisualizer();
