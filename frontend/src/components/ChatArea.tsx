@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef } from "react";
-import { Bot, User, Play, Volume2, Sparkles } from "lucide-react";
+import { Bot, User, Play, Volume2 } from "lucide-react";
 import { ChatMessage } from "@/lib/types";
 
 interface ChatAreaProps {
@@ -32,25 +32,6 @@ export function ChatArea({
       id="chat-messages"
       className="glass-panel flex-1 min-h-0 overflow-y-auto p-4 md:p-6 flex flex-col gap-4 scroll-smooth bg-white border border-neutral-200 shadow-xs"
     >
-      {/* Welcome Message Card */}
-      <div className="flex items-start gap-3.5 max-w-[85%] self-start animate-in fade-in slide-in-from-bottom-2 duration-300">
-        <div className="w-9 h-9 rounded-xl bg-black flex items-center justify-center text-white shrink-0 shadow-xs">
-          <Bot className="w-5 h-5" />
-        </div>
-        <div className="rounded-2xl p-4 bg-neutral-50 border border-neutral-200 shadow-xs text-black">
-          <div className="text-[11px] font-bold uppercase tracking-wider text-neutral-500 mb-1.5 flex items-center gap-1.5">
-            <Sparkles className="w-3 h-3 text-black" />
-            NexusVoice Assistant
-          </div>
-          <div className="text-sm leading-relaxed text-black">
-            Hello! I am your personal voice assistant. Speak by clicking the
-            microphone button or type below. Your voice is transcribed locally
-            via <strong className="text-black font-semibold">OpenVINO Whisper Base INT8</strong>,
-            processed by your <strong className="text-black font-semibold">LM Studio LLM</strong>,
-            and spoken back with <strong className="text-black font-semibold">Kokoro-82M TTS</strong>!
-          </div>
-        </div>
-      </div>
 
       {/* Render Chat Messages */}
       {messages.map((msg, index) => {

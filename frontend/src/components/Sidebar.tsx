@@ -139,7 +139,7 @@ export function Sidebar({
         </div>
 
         {/* STT Card */}
-        <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200 hover:bg-neutral-100/70 hover:border-neutral-300 transition-all duration-200">
+        <div className="p-3 rounded-xl bg-neutral-200 border border-neutral-200 hover:bg-neutral-100/70 hover:border-neutral-300 transition-all duration-200">
           <div className="flex items-center justify-between mb-1">
             <div className="flex items-center gap-2">
               <span className="status-indicator online" />
@@ -165,7 +165,7 @@ export function Sidebar({
         </div>
 
         {/* LLM Card */}
-        <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200 hover:bg-neutral-100/70 hover:border-neutral-300 transition-all duration-200">
+        <div className="p-3 rounded-xl bg-neutral-200 border border-neutral-200 hover:bg-neutral-100/70 hover:border-neutral-300 transition-all duration-200">
           <div className="flex items-center justify-between mb-1">
             <div className="flex items-center gap-2">
               <span
@@ -195,7 +195,7 @@ export function Sidebar({
         </div>
 
         {/* TTS Card */}
-        <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200 hover:border-neutral-300 transition-all duration-200">
+        <div className="p-3 rounded-xl bg-neutral-200 border border-neutral-200 hover:border-neutral-300 transition-all duration-200">
           <div className="flex items-center justify-between mb-1">
             <div className="flex items-center gap-2">
               <span className="status-indicator online" />
@@ -347,7 +347,7 @@ export function Sidebar({
               value={selectedModel}
               onChange={(e) => onSelectModel(e.target.value)}
               disabled={isLoadingModels || !health?.lm_studio_connected}
-              className="w-full appearance-none bg-white border border-neutral-300 hover:border-black text-black text-xs rounded-lg px-3 py-2.5 outline-none focus:border-black focus:ring-1 focus:ring-black transition-colors cursor-pointer pr-8 font-sans disabled:opacity-50"
+              className="w-full appearance-none bg-neutral-200 border border-neutral-300 hover:border-black text-black text-xs rounded-lg px-3 py-2.5 outline-none focus:border-black focus:ring-1 focus:ring-black transition-colors cursor-pointer pr-8 font-sans disabled:opacity-50"
             >
               {availableModels && availableModels.length > 0 ? (
                 availableModels.map((m) => (
@@ -394,7 +394,7 @@ export function Sidebar({
               id="speaker-select"
               value={selectedSpeaker}
               onChange={(e) => onSelectSpeaker(e.target.value)}
-              className="w-full appearance-none bg-white border border-neutral-300 hover:border-black text-black text-xs rounded-lg px-3 py-2.5 outline-none focus:border-black focus:ring-1 focus:ring-black transition-colors cursor-pointer pr-8 font-sans"
+              className="w-full appearance-none bg-neutral-200 border border-neutral-300 hover:border-black text-black text-xs rounded-lg px-3 py-2.5 outline-none focus:border-black focus:ring-1 focus:ring-black transition-colors cursor-pointer pr-8 font-sans"
             >
               {speakersList.map((spk) => (
                 <option key={spk} value={spk} className="bg-white text-black">
