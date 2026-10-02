@@ -333,6 +333,70 @@ async def websocket_assistant_endpoint(websocket: WebSocket) -> None:
                         {"type": "error", "message": str(proc_exc)}
                     )
 
+            elif msg_type == "tts":
+                req_tts_device = data.get("tts_device")
+                if req_tts_device and str(req_tts_device).lower() != str(ws_pipeline.tts.device).lower():
+                    try:
+                        ws_pipeline.set_tts_device(req_tts_device)
+                    except Exception:
+                        pass
+                text = data.get("text") or data.get("prompt", "")
+                speaker = data.get("speaker")
+                play_host = data.get("play_audio", False)
+
+                if not text or not str(text).strip():
+                    await websocket.send_json(
+                        {"type": "error", "message": "Missing or empty text for TTS synthesis."}
+                    )
+                    continue
+
+                try:
+                    await websocket.send_json(
+                        {
+                            "type": "status",
+                            "stage": "tts",
+                            "message": "Synthesizing speech with Kokoro TTS...",
+                        }
+                    )
+
+                    async def _send_tts_chunk(chunk) -> None:
+                        await websocket.send_json(
+                            {
+                                "type": "chunk",
+                                "index": chunk.sentence_index,
+                                "text": chunk.text,
+                                "audio_base64": base64.b64encode(
+                                    chunk.audio_bytes
+                                ).decode("utf-8"),
+                                "sample_rate": chunk.sample_rate,
+                            }
+                        )
+
+                    res = await ws_pipeline.process_direct_tts(
+                        text=text,
+                        speaker=speaker,
+                        play_audio=play_host,
+                        on_chunk=_send_tts_chunk,
+                        session_id=session_id,
+                    )
+
+                    await websocket.send_json(
+                        {
+                            "type": "result",
+                            "user_text": res.user_text,
+                            "assistant_text": res.assistant_text,
+                            "audio_base64": base64.b64encode(
+                                res.audio_bytes
+                            ).decode("utf-8"),
+                            "metrics": _metrics_dict(res.metrics),
+                        }
+                    )
+                except Exception as proc_exc:
+                    logger.error("WebSocket TTS cycle error: %s", proc_exc)
+                    await websocket.send_json(
+                        {"type": "error", "message": str(proc_exc)}
+                    )
+
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected.")
     except Exception as exc:

@@ -228,6 +228,19 @@
             <div id="recording-timer" class="recording-timer hidden">00:00</div>
           </div>
 
+          <!-- Mode Switcher Bar -->
+          <div class="dock-mode-bar">
+            <div class="mode-toggle-group">
+              <button type="button" class="mode-tab active" data-mode="assistant" id="mode-tab-assistant">
+                <span>🤖 AI Assistant</span>
+              </button>
+              <button type="button" class="mode-tab" data-mode="tts" id="mode-tab-tts">
+                <span>🔊 Direct TTS</span>
+              </button>
+            </div>
+            <span class="mode-hint" id="mode-hint-text">Conversational agent (mic or text)</span>
+          </div>
+
           <!-- Interactive Voice and Text Controls -->
           <div class="interaction-bar">
             <button
@@ -270,6 +283,12 @@
                 placeholder="Type a message or click mic to talk..."
                 autocomplete="off"
               />
+              <button id="tts-btn" class="tts-button" title="Speak text directly with Kokoro TTS">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                </svg>
+              </button>
               <button id="send-btn" class="send-button" title="Send Text">
                 <svg
                   viewBox="0 0 24 24"

@@ -175,16 +175,164 @@ async def run_file_transcription(
         print(f"Failed to process audio file: {exc}")
 
 
+async def run_direct_tts(
+    pipeline: AssistantPipeline,
+    text: str,
+    speaker: Optional[str] = None,
+    output_file: Optional[str] = None,
+    play_audio: bool = True,
+    tts_device: Optional[str] = None,
+) -> None:
+    """Synthesizes text directly into speech with Kokoro-82M.
+
+    Args:
+        pipeline: Initialized AssistantPipeline instance.
+        text: Text to synthesize into speech.
+        speaker: Voice persona name.
+        output_file: Optional file path to save synthesized audio as WAV.
+        play_audio: Whether to play synthesized audio on host speakers.
+        tts_device: Compute device override ('cpu' or 'npu').
+    """
+    target_speaker = speaker or pipeline.tts.speaker
+    print(f"\n[TTS] Synthesizing speech with Kokoro-82M (speaker: {target_speaker})...")
+    res = await pipeline.process_direct_tts(
+        text=text,
+        speaker=speaker,
+        play_audio=play_audio,
+        tts_device=tts_device,
+    )
+
+    if output_file:
+        try:
+            with open(output_file, "wb") as f:
+                f.write(res.audio_bytes)
+            print(f"[Saved] Audio successfully saved to: {output_file}")
+        except Exception as io_err:
+            print(f"[Warning] Failed to write audio file '{output_file}': {io_err}")
+
+    print(f">>> Synthesized: {res.assistant_text}")
+    print(
+        f"[Metrics] TTS Latency: {res.metrics.tts_latency_ms}ms | "
+        f"RTF: {res.metrics.tts_realtime_factor}x | "
+        f"Sample Rate: {res.sample_rate}Hz\n"
+    )
+
+
+async def run_tts_loop(
+    pipeline: AssistantPipeline,
+    speaker: Optional[str] = None,
+    output_file: Optional[str] = None,
+    play_audio: bool = True,
+    tts_device: Optional[str] = None,
+) -> None:
+    """Runs an interactive text-to-speech loop for direct speech synthesis.
+
+    Args:
+        pipeline: Initialized AssistantPipeline instance.
+        speaker: Voice persona name.
+        output_file: Optional default output file path template.
+        play_audio: Whether to play synthesized audio through speakers.
+        tts_device: Compute device override ('cpu' or 'npu').
+    """
+    print("Standalone Text-to-Speech (TTS) Mode Active.")
+    print("Type text and press Enter to hear it synthesized directly by Kokoro-82M.")
+    print("Commands:")
+    print("  :voice <name>     Change voice persona (e.g. :voice af_bella)")
+    print("  :save <file.wav>  Save subsequent utterances to WAV file")
+    print("  :device <cpu/npu> Switch compute device")
+    print("  'q' or 'quit'     Exit\n")
+
+    current_speaker = speaker
+    current_save = output_file
+    idx = 1
+
+    while True:
+        try:
+            prompt = input("TTS > ").strip()
+            if not prompt:
+                continue
+            if prompt.lower() in ("q", "quit", "exit"):
+                print("Exiting TTS mode. Goodbye!")
+                break
+
+            if prompt.startswith(":voice "):
+                new_spk = prompt.split(" ", 1)[1].strip()
+                if new_spk:
+                    current_speaker = new_spk
+                    print(f"[Voice changed to: {current_speaker}]\n")
+                continue
+
+            if prompt.startswith(":save "):
+                current_save = prompt.split(" ", 1)[1].strip()
+                print(f"[Subsequent audio will be saved to: {current_save}]\n")
+                continue
+
+            if prompt.startswith(":device "):
+                new_dev = prompt.split(" ", 1)[1].strip()
+                try:
+                    pipeline.set_tts_device(new_dev)
+                    print(f"[TTS device set to: {new_dev}]\n")
+                except Exception as d_err:
+                    print(f"[Device error: {d_err}]\n")
+                continue
+
+            save_path = current_save
+            if current_save and "{n}" in current_save:
+                save_path = current_save.replace("{n}", str(idx))
+
+            await run_direct_tts(
+                pipeline=pipeline,
+                text=prompt,
+                speaker=current_speaker,
+                output_file=save_path,
+                play_audio=play_audio,
+                tts_device=tts_device,
+            )
+            idx += 1
+
+        except KeyboardInterrupt:
+            print("\nSession interrupted. Exiting.")
+            break
+        except Exception as exc:
+            print(f"\n[Error] {exc}\n")
+
+
 def main() -> None:
     """CLI argument parser and dispatcher entrypoint."""
     parser = argparse.ArgumentParser(
-        description="Personal Voice Assistant CLI powered by OpenVINO, LM Studio, and Qwen-TTS"
+        description="Personal Voice Assistant CLI powered by OpenVINO, LM Studio, and Kokoro-82M TTS"
     )
     parser.add_argument(
         "--mode",
-        choices=["voice", "text", "file", "info", "diag", "bench"],
+        choices=["voice", "text", "tts", "file", "info", "diag", "bench"],
         default="voice",
-        help="Interaction mode: voice (mic), text (typed), file (audio file), info, diag (NPU-verified devices), or bench (Kokoro CPU/GPU/NPU)",
+        help="Interaction mode: voice (mic), text (LLM chat), tts (direct speech synthesis), file (audio file), info, diag, or bench",
+    )
+    parser.add_argument(
+        "--text",
+        type=str,
+        default=None,
+        help="Explicit text to synthesize in TTS mode (or prompt in text mode)",
+    )
+    parser.add_argument(
+        "--out",
+        "--output",
+        dest="output_file",
+        type=str,
+        default=None,
+        help="Path to output WAV file to save synthesized speech (e.g. speech.wav)",
+    )
+    parser.add_argument(
+        "--no-play",
+        action="store_true",
+        help="Disable audio playback through speakers",
+    )
+    parser.add_argument(
+        "--tts-device",
+        type=str,
+        default=None,
+        choices=["cpu", "npu", "gpu", "auto"],
+        help="Compute device override for Kokoro TTS (cpu, npu)",
     )
     parser.add_argument(
         "--bench-text",
@@ -219,20 +367,27 @@ def main() -> None:
         "--speaker",
         type=str,
         default=settings.tts_speaker,
-        help="Voice persona for Qwen TTS (e.g. ryan, aiden, vivian, serena)",
+        help="Voice persona for Kokoro TTS (e.g. af_heart, am_adam, af_bella, am_michael)",
     )
     args = parser.parse_args()
+
+    # If --text is explicitly provided without specifying --mode, default to TTS synthesis
+    if args.text and args.mode == "voice":
+        args.mode = "tts"
 
     print_banner()
 
     pipeline = AssistantPipeline()
+
+    if args.tts_device:
+        pipeline.set_tts_device(args.tts_device)
 
     if args.mode == "info":
         print("Hardware & Subsystem Information:")
         devices = pipeline.stt.get_openvino_devices()
         print(f"  • OpenVINO Accelerators: {', '.join(devices)}")
         speakers = pipeline.tts.get_supported_speakers()
-        print(f"  • Qwen-TTS Voices:       {', '.join(speakers)}")
+        print(f"  • Kokoro-TTS Voices:     {', '.join(speakers)}")
         audio_devs = AudioProcessor.get_audio_devices()
         print(f"  • Default Input Device:  {audio_devs.get('default_input')}")
         print(f"  • Default Output Device: {audio_devs.get('default_output')}")
@@ -247,7 +402,6 @@ def main() -> None:
 
         print("NPU-verified device diagnostics (runtime-confirmed, never assumed):")
         print()
-        # Ensure Kokoro backend/effective state is known without full warmup.
         try:
             pipeline.tts.load_model()
         except Exception as exc:
@@ -276,7 +430,36 @@ def main() -> None:
         print(format_results_table(results))
         return
 
-    # Warmup pipeline components
+    # In standalone TTS mode, load only the TTS model for rapid startup without LLM requirement
+    if args.mode == "tts":
+        print("Loading Kokoro-82M TTS engine...")
+        pipeline.tts.load_model()
+        print("TTS Engine ready.\n")
+
+        if args.text:
+            asyncio.run(
+                run_direct_tts(
+                    pipeline,
+                    text=args.text,
+                    speaker=args.speaker,
+                    output_file=args.output_file,
+                    play_audio=not args.no_play,
+                    tts_device=args.tts_device,
+                )
+            )
+        else:
+            asyncio.run(
+                run_tts_loop(
+                    pipeline,
+                    speaker=args.speaker,
+                    output_file=args.output_file,
+                    play_audio=not args.no_play,
+                    tts_device=args.tts_device,
+                )
+            )
+        return
+
+    # Full assistant warmup for voice / text / file modes
     print("Warming up models...")
     pipeline.warmup(warm_npu=args.warm_npu)
     print("Warmup complete.\n")
@@ -286,7 +469,17 @@ def main() -> None:
             run_voice_loop(pipeline, duration=args.duration, speaker=args.speaker)
         )
     elif args.mode == "text":
-        asyncio.run(run_text_loop(pipeline, speaker=args.speaker))
+        if args.text:
+            # Single-turn prompt
+            asyncio.run(
+                pipeline.process_text_prompt(
+                    prompt=args.text,
+                    speaker=args.speaker,
+                    play_audio=not args.no_play,
+                )
+            )
+        else:
+            asyncio.run(run_text_loop(pipeline, speaker=args.speaker))
     elif args.mode == "file":
         if not args.file:
             print("Error: --file <path> is required when using --mode file.")

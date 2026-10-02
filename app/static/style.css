@@ -729,7 +729,7 @@ body {
   background: #ffffff;
   border: 1px solid var(--border-subtle);
   border-radius: 26px;
-  padding: 0 54px 0 20px;
+  padding: 0 95px 0 20px;
   color: var(--text-main);
   font-family: var(--font-sans);
   font-size: 0.95rem;
@@ -740,6 +740,27 @@ body {
 .text-input-wrap input:focus {
   border-color: #000000;
   box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
+}
+
+.tts-button {
+  position: absolute;
+  right: 50px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #f3f4f6;
+  border: 1px solid var(--border-subtle);
+  color: #000000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tts-button:hover {
+  background: #e5e7eb;
+  transform: scale(1.06);
 }
 
 .send-button {
@@ -765,6 +786,69 @@ body {
 .send-button svg {
   width: 18px;
   height: 18px;
+}
+
+/* Dock Mode Switcher */
+.dock-mode-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+}
+
+.mode-toggle-group {
+  display: flex;
+  gap: 4px;
+  background: #f3f4f6;
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+}
+
+.mode-tab {
+  border: none;
+  background: transparent;
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mode-tab.active {
+  background: #000000;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.mode-hint {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+.download-bubble-btn {
+  background: #ffffff;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: #374151;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+
+.download-bubble-btn:hover {
+  background: #f3f4f6;
+  color: #000000;
 }
 
 .hidden {

@@ -718,6 +718,105 @@ class AssistantPipeline:
             metrics=metrics,
         )
 
+    async def process_direct_tts(
+        self,
+        text: str,
+        speaker: Optional[str] = None,
+        language: Optional[str] = None,
+        play_audio: Optional[bool] = None,
+        on_chunk: Optional[Callable[[AssistantStreamChunk], Any]] = None,
+        session_id: str = "default",
+        tts_device: Optional[str] = None,
+    ) -> AssistantResponse:
+        """Synthesizes text directly into speech bypassing STT transcription and LLM generation.
+
+        Enables the pipeline to operate as a standalone, low-latency Text-to-Speech synthesizer.
+
+        Args:
+            text: Explicit text to synthesize into spoken audio.
+            speaker: Optional voice persona override (e.g. 'af_heart', 'am_adam').
+            language: Optional language code override (e.g. 'a', 'b').
+            play_audio: Whether to play output audio on host device speakers.
+            on_chunk: Optional callback invoked with the synthesized audio chunk.
+            session_id: Session key isolating playback.
+            tts_device: Optional compute processing unit override ('cpu' or 'npu').
+
+        Returns:
+            AssistantResponse containing the text, WAV audio bytes, and synthesis metrics.
+        """
+        if not text or not str(text).strip():
+            raise ValueError("Input text cannot be empty for TTS synthesis.")
+
+        if tts_device is not None and str(tts_device).strip().lower() != str(self.tts.device).lower():
+            try:
+                self.set_tts_device(tts_device)
+            except Exception as d_exc:
+                logger.warning("Could not set TTS device '%s': %s", tts_device, d_exc)
+
+        pipeline_start = time.perf_counter()
+        target_speaker = speaker or self.tts.speaker
+        target_lang = language or self.tts.language
+
+        cleaned = clean_text_for_speech(text)
+        if not cleaned.strip():
+            cleaned = text.strip()
+
+        audio_data, sr = await asyncio.to_thread(
+            self.tts.synthesize,
+            cleaned,
+            speaker=target_speaker,
+            language=target_lang,
+        )
+
+        tts_wall_ms = round((time.perf_counter() - pipeline_start) * 1000.0, 2)
+        wav_bytes = AudioProcessor.to_wav_bytes(audio_data, sr)
+
+        chunk = AssistantStreamChunk(
+            sentence_index=0,
+            text=cleaned,
+            audio_bytes=wav_bytes,
+            sample_rate=sr,
+            is_final=True,
+        )
+        if on_chunk is not None:
+            await self._emit_chunk(on_chunk, chunk)
+
+        should_play = play_audio if play_audio is not None else settings.auto_play_audio
+        if should_play and len(audio_data) > 0:
+            prev_player = self._players.pop(session_id, None)
+            if prev_player is not None:
+                try:
+                    prev_player.stop()
+                except Exception:
+                    pass
+            stream_player = AudioProcessor.create_stream_player(max_queue=2)
+            self._players[session_id] = stream_player
+            stream_player.enqueue(audio_data)
+            stream_player.finish(wait=False)
+
+        duration_sec = len(audio_data) / sr if sr > 0 else 0.0
+        rtf = round(duration_sec / max(tts_wall_ms / 1000.0, 0.001), 2)
+        metrics = PipelineMetrics(
+            stt_latency_ms=0.0,
+            llm_latency_ms=0.0,
+            tts_latency_ms=tts_wall_ms,
+            tts_synth_ms=tts_wall_ms,
+            ttfa_ms=tts_wall_ms,
+            total_latency_ms=tts_wall_ms,
+            tts_realtime_factor=rtf,
+            voice_latency_ms=tts_wall_ms,
+        )
+        self.last_metrics = metrics
+
+        return AssistantResponse(
+            user_text=text,
+            assistant_text=cleaned,
+            audio_bytes=wav_bytes,
+            sample_rate=sr,
+            metrics=metrics,
+        )
+
+
     async def stream_text_prompt(
         self,
         prompt: str,

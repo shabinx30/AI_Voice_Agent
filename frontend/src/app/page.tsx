@@ -50,6 +50,7 @@ export default function NexusVoiceApp() {
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [inputText, setInputText] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [interactionMode, setInteractionMode] = useState<"assistant" | "tts">("assistant");
 
   // Recording state
   const [isRecording, setIsRecording] = useState<boolean>(false);
@@ -798,6 +799,123 @@ export default function NexusVoiceApp() {
     }
   };
 
+  // Direct TTS Submission Handler
+  const handleDirectTTSSubmit = async () => {
+    const trimmed = inputText.trim();
+    if (!trimmed || isProcessing || isRecording) return;
+
+    setInputText("");
+    setIsProcessing(true);
+    setStatusText("Synthesizing speech with Kokoro-82M...");
+    streamingTokenBufferRef.current = "";
+    setStreamingTokenBuffer("");
+
+    audioQueueRef.current?.reset();
+
+    const userMsgId = `tts-user-${Date.now()}`;
+    const ttsMsgId = `tts-out-${Date.now()}`;
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: userMsgId,
+        role: "user",
+        text: trimmed,
+        timestamp: Date.now(),
+        isTTSOnly: true,
+      },
+      {
+        id: ttsMsgId,
+        role: "assistant",
+        text: trimmed,
+        isStreaming: true,
+        timestamp: Date.now(),
+        isTTSOnly: true,
+        speaker: selectedSpeaker,
+      },
+    ]);
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "tts",
+          text: trimmed,
+          speaker: selectedSpeaker,
+          play_audio: playHostAudio,
+          tts_device: selectedTTSDevice,
+        })
+      );
+    } else {
+      // Fallback via HTTP /api/tts/generate
+      handleHttpTTSFallback(trimmed, ttsMsgId);
+    }
+  };
+
+  // HTTP Direct TTS Fallback
+  const handleHttpTTSFallback = async (
+    textToSynth: string,
+    ttsMsgId: string
+  ) => {
+    try {
+      const baseUrl = getApiBaseUrl();
+      const res = await fetch(`${baseUrl}/api/tts/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: textToSynth,
+          speaker: selectedSpeaker,
+          device: selectedTTSDevice,
+          play_audio: playHostAudio,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`TTS synthesis failed (Status ${res.status})`);
+      }
+
+      const data = await res.json();
+      if (data.metrics) {
+        setMetrics(data.metrics);
+      }
+
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === ttsMsgId
+            ? {
+                ...msg,
+                text: data.assistant_text || textToSynth,
+                audioBase64: data.audio_base64,
+                isStreaming: false,
+              }
+            : msg
+        )
+      );
+
+      if (!playHostAudio && data.audio_base64 && audioPlayerRef.current) {
+        audioPlayerRef.current.src = `data:audio/wav;base64,${data.audio_base64}`;
+        audioPlayerRef.current.play().catch(() => {});
+      }
+
+      setStatusText("All Pipelines Active • Ready for Voice Input");
+    } catch (err: any) {
+      console.error("HTTP TTS fallback error:", err);
+      setStatusText(`TTS Error: ${err?.message || err}`);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === ttsMsgId
+            ? {
+                ...msg,
+                text: `Error synthesizing speech: ${err?.message || err}`,
+                isStreaming: false,
+              }
+            : msg
+        )
+      );
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   // HTTP Text Fallback
   const handleHttpTextFallback = async (
     promptText: string,
@@ -973,6 +1091,9 @@ export default function NexusVoiceApp() {
           inputText={inputText}
           onChangeInputText={setInputText}
           onSubmitText={handleTextSubmit}
+          onSubmitDirectTTS={handleDirectTTSSubmit}
+          interactionMode={interactionMode}
+          onToggleInteractionMode={setInteractionMode}
           isProcessing={isProcessing}
         />
       </main>

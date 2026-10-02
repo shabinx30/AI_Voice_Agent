@@ -154,6 +154,7 @@ class TTSRequest(BaseModel):
     speaker: Optional[str] = Field(None, description="Voice persona")
     language: Optional[str] = Field(None, description="Spoken language")
     device: Optional[str] = Field(None, description="Compute device override ('cpu' or 'npu')")
+    play_audio: bool = Field(False, description="Whether to play output on server speakers")
 
 
 class InteractResponse(BaseModel):
@@ -549,12 +550,22 @@ async def synthesize_speech(request: TTSRequest) -> Response:
     """Synthesizes text into speech using Kokoro-82M and streams the WAV audio.
 
     Args:
-        request: Text to synthesize and optional speaker voice / device.
+        request: Text to synthesize and optional speaker voice / device / playback flag.
 
     Returns:
         Streaming WAV audio file response.
     """
     try:
+        if request.play_audio:
+            res = await pipeline.process_direct_tts(
+                text=request.text,
+                speaker=request.speaker,
+                language=request.language,
+                play_audio=True,
+                tts_device=request.device,
+            )
+            return Response(content=res.audio_bytes, media_type="audio/wav")
+
         wav_bytes = await asyncio.to_thread(
             pipeline.tts.synthesize_to_wav_bytes,
             text=request.text,
@@ -568,6 +579,39 @@ async def synthesize_speech(request: TTSRequest) -> Response:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Speech synthesis failed: {exc}",
+        ) from exc
+
+
+@router.post("/tts/generate", response_model=InteractResponse)
+async def generate_tts_speech(request: TTSRequest) -> InteractResponse:
+    """Synthesizes text directly into speech and returns base64 audio and latency metrics.
+
+    Args:
+        request: Text to synthesize, optional voice persona, device, and playback options.
+
+    Returns:
+        InteractResponse with user text, assistant text, base64 audio, and timing metrics.
+    """
+    try:
+        res = await pipeline.process_direct_tts(
+            text=request.text,
+            speaker=request.speaker,
+            language=request.language,
+            play_audio=request.play_audio,
+            tts_device=request.device,
+        )
+        return InteractResponse(
+            user_text=res.user_text,
+            assistant_text=res.assistant_text,
+            audio_base64=base64.b64encode(res.audio_bytes).decode("utf-8"),
+            sample_rate=res.sample_rate,
+            metrics=_metrics_dict(res.metrics),
+        )
+    except Exception as exc:
+        logger.error("API TTS generate error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"TTS generation failed: {exc}",
         ) from exc
 
 

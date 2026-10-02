@@ -412,4 +412,75 @@ def test_websocket_tts_device_handling() -> None:
             assert resp2["device"] == "npu"
 
 
+def test_tts_stream_endpoint() -> None:
+    """Tests POST /api/tts returns streaming WAV bytes."""
+    from unittest.mock import patch
+    from app.api import routes
+
+    fake_wav = b"RIFF....WAVEfmt ...."
+    with patch.object(routes.pipeline.tts, "synthesize_to_wav_bytes", return_value=fake_wav):
+        response = client.post("/api/tts", json={"text": "Hello world from TTS"})
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "audio/wav"
+        assert response.content == fake_wav
+
+
+def test_tts_generate_endpoint() -> None:
+    """Tests POST /api/tts/generate returns structured JSON with base64 audio and metrics."""
+    from unittest.mock import patch
+    import numpy as np
+    from app.api import routes
+
+    fake_waveform = np.zeros(24000, dtype=np.float32)
+    with patch.object(routes.pipeline.tts, "synthesize", return_value=(fake_waveform, 24000)):
+        response = client.post(
+            "/api/tts/generate",
+            json={"text": "Hello world from direct TTS", "speaker": "af_bella"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["user_text"] == "Hello world from direct TTS"
+        assert data["assistant_text"] == "Hello world from direct TTS"
+        assert len(data["audio_base64"]) > 0
+        assert data["sample_rate"] == 24000
+        assert "metrics" in data
+        assert "tts_ms" in data["metrics"]
+
+
+def test_websocket_direct_tts() -> None:
+    """Tests /ws/assistant direct speech synthesis via type: 'tts'."""
+    from unittest.mock import patch
+    import numpy as np
+    from app.api.websocket import ws_pipeline
+
+    fake_waveform = np.zeros(24000, dtype=np.float32)
+    with patch.object(ws_pipeline.tts, "synthesize", return_value=(fake_waveform, 24000)):
+        with client.websocket_connect("/ws/assistant") as websocket:
+            websocket.send_json({
+                "type": "tts",
+                "text": "Direct WebSocket TTS speech",
+                "speaker": "af_heart",
+            })
+
+            # First message should be status
+            msg1 = websocket.receive_json()
+            assert msg1["type"] == "status"
+            assert msg1["stage"] == "tts"
+
+            # Subsequent messages: chunk and/or result
+            received_result = False
+            for _ in range(5):
+                msg = websocket.receive_json()
+                if msg["type"] == "result":
+                    received_result = True
+                    assert msg["user_text"] == "Direct WebSocket TTS speech"
+                    assert msg["assistant_text"] == "Direct WebSocket TTS speech"
+                    assert len(msg["audio_base64"]) > 0
+                    assert "metrics" in msg
+                    break
+
+            assert received_result, "Did not receive final result frame from WebSocket TTS"
+
+
+
 

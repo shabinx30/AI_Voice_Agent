@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useRef, useEffect } from "react";
-import { Mic, Square, Send } from "lucide-react";
+import { Mic, Square, Send, Volume2, Bot } from "lucide-react";
 
 interface DockProps {
   isRecording: boolean;
@@ -11,6 +11,9 @@ interface DockProps {
   inputText: string;
   onChangeInputText: (val: string) => void;
   onSubmitText: () => void;
+  onSubmitDirectTTS: () => void;
+  interactionMode: "assistant" | "tts";
+  onToggleInteractionMode: (mode: "assistant" | "tts") => void;
   isProcessing: boolean;
 }
 
@@ -22,6 +25,9 @@ export function Dock({
   inputText,
   onChangeInputText,
   onSubmitText,
+  onSubmitDirectTTS,
+  interactionMode,
+  onToggleInteractionMode,
   isProcessing,
 }: DockProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -107,7 +113,11 @@ export function Dock({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      onSubmitText();
+      if (interactionMode === "tts") {
+        onSubmitDirectTTS();
+      } else {
+        onSubmitText();
+      }
     }
   };
 
@@ -128,6 +138,41 @@ export function Dock({
             {formatTime(recordingSeconds)}
           </div>
         )}
+      </div>
+
+      {/* Mode Selector Row */}
+      <div className="flex items-center justify-between px-1 text-xs">
+        <div className="flex items-center p-0.5 rounded-lg bg-neutral-100 border border-neutral-200">
+          <button
+            type="button"
+            onClick={() => onToggleInteractionMode("assistant")}
+            className={`px-3 py-1 rounded-md font-medium flex items-center gap-1.5 transition-all cursor-pointer ${
+              interactionMode === "assistant"
+                ? "bg-black text-white shadow-xs"
+                : "text-neutral-600 hover:text-black"
+            }`}
+          >
+            <Bot className="w-3.5 h-3.5" />
+            <span>AI Assistant</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onToggleInteractionMode("tts")}
+            className={`px-3 py-1 rounded-md font-medium flex items-center gap-1.5 transition-all cursor-pointer ${
+              interactionMode === "tts"
+                ? "bg-black text-white shadow-xs"
+                : "text-neutral-600 hover:text-black"
+            }`}
+          >
+            <Volume2 className="w-3.5 h-3.5" />
+            <span>Direct TTS Tool</span>
+          </button>
+        </div>
+        <div className="text-[11px] text-neutral-500 font-mono hidden sm:inline-block">
+          {interactionMode === "tts"
+            ? "Kokoro-82M speech synthesis (bypasses LLM)"
+            : "Conversational voice & text agent"}
+        </div>
       </div>
 
       {/* Control Buttons & Input Bar */}
@@ -161,20 +206,52 @@ export function Dock({
             placeholder={
               isRecording
                 ? "Listening to voice input..."
+                : interactionMode === "tts"
+                ? "Type text to synthesize and speak directly with Kokoro TTS..."
                 : "Type a message or click mic to talk..."
             }
             disabled={isRecording}
-            className="w-full h-12 bg-white border border-neutral-300 focus:border-black rounded-full pl-5 pr-13 text-sm text-black placeholder:text-neutral-400 outline-none transition-all focus:ring-2 focus:ring-black/10 disabled:opacity-50"
+            className="w-full h-12 bg-white border border-neutral-300 focus:border-black rounded-full pl-5 pr-22 text-sm text-black placeholder:text-neutral-400 outline-none transition-all focus:ring-2 focus:ring-black/10 disabled:opacity-50"
           />
 
-          <button
-            onClick={onSubmitText}
-            disabled={!inputText.trim() || isProcessing || isRecording}
-            title="Send Message"
-            className="absolute right-1.5 w-9 h-9 rounded-full bg-black hover:bg-neutral-800 disabled:opacity-30 disabled:hover:bg-black flex items-center justify-center text-white transition-all cursor-pointer shadow-xs"
-          >
-            <Send className="w-4 h-4" />
-          </button>
+          <div className="absolute right-1.5 flex items-center gap-1">
+            {/* Quick Direct TTS Button (available in assistant mode too) */}
+            {interactionMode === "assistant" && (
+              <button
+                type="button"
+                onClick={onSubmitDirectTTS}
+                disabled={!inputText.trim() || isProcessing || isRecording}
+                title="Synthesize and speak directly with TTS (bypasses LLM)"
+                className="w-9 h-9 rounded-full bg-neutral-100 hover:bg-neutral-200 border border-neutral-300 disabled:opacity-30 flex items-center justify-center text-black transition-all cursor-pointer shadow-xs"
+              >
+                <Volume2 className="w-4 h-4 text-black" />
+              </button>
+            )}
+
+            {/* Primary Action Button */}
+            {interactionMode === "tts" ? (
+              <button
+                type="button"
+                onClick={onSubmitDirectTTS}
+                disabled={!inputText.trim() || isProcessing || isRecording}
+                title="Synthesize Speech (TTS)"
+                className="px-3.5 h-9 rounded-full bg-black hover:bg-neutral-800 disabled:opacity-30 disabled:hover:bg-black flex items-center gap-1.5 text-white text-xs font-semibold transition-all cursor-pointer shadow-xs"
+              >
+                <Volume2 className="w-3.5 h-3.5" />
+                <span>Speak</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onSubmitText}
+                disabled={!inputText.trim() || isProcessing || isRecording}
+                title="Send Message to Assistant"
+                className="w-9 h-9 rounded-full bg-black hover:bg-neutral-800 disabled:opacity-30 disabled:hover:bg-black flex items-center justify-center text-white transition-all cursor-pointer shadow-xs"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </footer>

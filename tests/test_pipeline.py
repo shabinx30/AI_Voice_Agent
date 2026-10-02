@@ -338,4 +338,76 @@ def test_pipeline_preserves_paragraphs_in_assistant_text() -> None:
     asyncio.run(_test())
 
 
+def test_pipeline_process_direct_tts() -> None:
+    """Verifies that process_direct_tts synthesizes text directly bypassing STT and LLM."""
+    async def _test() -> None:
+        mock_stt = MagicMock()
+        mock_llm = MagicMock()
+        mock_tts = MagicMock()
+
+        sample_rate = 24000
+        test_waveform = np.zeros(sample_rate, dtype=np.float32)
+        mock_tts.sample_rate = sample_rate
+        mock_tts.speaker = "af_heart"
+        mock_tts.language = "a"
+        mock_tts.synthesize = MagicMock(return_value=(test_waveform, sample_rate))
+
+        pipeline = AssistantPipeline(
+            stt_engine=mock_stt,
+            llm_client=mock_llm,
+            tts_engine=mock_tts,
+        )
+
+        emitted_chunks = []
+        def _on_chunk(chunk):
+            emitted_chunks.append(chunk)
+
+        res = await pipeline.process_direct_tts(
+            text="Hello from direct TTS!",
+            speaker="af_bella",
+            play_audio=False,
+            on_chunk=_on_chunk,
+        )
+
+        # STT and LLM must NOT have been called
+        mock_stt.transcribe.assert_not_called()
+        mock_llm.generate_response.assert_not_called()
+        if hasattr(mock_llm, "stream_sentence_chunks") and isinstance(mock_llm.stream_sentence_chunks, MagicMock):
+            mock_llm.stream_sentence_chunks.assert_not_called()
+
+        # TTS must have been called with target speaker
+        mock_tts.synthesize.assert_called_once()
+        args, kwargs = mock_tts.synthesize.call_args
+        assert "Hello from direct TTS" in (args[0] if args else kwargs.get("text"))
+        assert kwargs.get("speaker") == "af_bella"
+
+        assert res.user_text == "Hello from direct TTS!"
+        assert res.assistant_text == "Hello from direct TTS!"
+        assert len(res.audio_bytes) > 0
+        assert res.sample_rate == sample_rate
+        assert res.metrics.tts_latency_ms >= 0
+        assert res.metrics.stt_latency_ms == 0.0
+        assert res.metrics.llm_latency_ms == 0.0
+        assert len(emitted_chunks) == 1
+        assert emitted_chunks[0].text == "Hello from direct TTS!"
+        assert emitted_chunks[0].is_final is True
+
+    asyncio.run(_test())
+
+
+def test_pipeline_process_direct_tts_empty_raises() -> None:
+    """Verifies that process_direct_tts with empty text raises ValueError."""
+    async def _test() -> None:
+        pipeline = AssistantPipeline(
+            stt_engine=MagicMock(),
+            llm_client=MagicMock(),
+            tts_engine=MagicMock(),
+        )
+        with pytest.raises(ValueError, match="Input text cannot be empty"):
+            await pipeline.process_direct_tts(text="   ")
+
+    asyncio.run(_test())
+
+
+
 

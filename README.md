@@ -124,7 +124,22 @@ Prefer working directly from the terminal? NexusVoice includes a rich CLI:
 .venv\Scripts\python.exe cli.py --mode file --file path/to/sample.wav
 ```
 
-### 4. Hardware & Accelerator Diagnostic
+### 4. Standalone Text-to-Speech (TTS) Mode
+NexusVoice can also be used directly as a standalone, high-fidelity speech synthesizer bypassing LLM inference:
+
+**Single-Shot Speech Synthesis (Play & Save to WAV):**
+```powershell
+.venv\Scripts\python.exe cli.py --text "Welcome to NexusVoice text-to-speech synthesis." --out speech.wav --speaker af_heart
+```
+*Tip: Add `--no-play` to synthesize and save directly to disk without playing over speakers.*
+
+**Interactive TTS Console:**
+```powershell
+.venv\Scripts\python.exe cli.py --mode tts --speaker af_bella
+```
+*Type text to hear it spoken aloud. Commands include `:voice <persona>`, `:save <file.wav>`, and `:device <cpu/npu>`.*
+
+### 5. Hardware & Accelerator Diagnostic
 ```powershell
 .venv\Scripts\python.exe cli.py --mode info
 ```
@@ -139,16 +154,17 @@ The server exposes an OpenAPI schema accessible at `http://localhost:8000/docs`:
 | :--- | :--- | :--- |
 | `GET` | `/api/health` | Subsystem health, OpenVINO devices, LM Studio connectivity |
 | `GET` | `/api/devices` | Discovers OpenVINO hardware and audio input/output devices |
-| `GET` | `/api/speakers`| Lists supported Qwen-TTS voices and languages |
+| `GET` | `/api/speakers`| Lists supported Kokoro-TTS voices and languages |
 | `POST` | `/api/transcribe` | Transcribes an uploaded audio file with Whisper Base INT8 |
 | `POST` | `/api/chat` | Sends text message to LM Studio LLM |
 | `POST` | `/api/chat/stream` | Streams LLM reply sentence-by-sentence (SSE) |
 | `POST` | `/api/chat/tokens` | Streams raw LLM token deltas for word-by-word display (SSE) |
-| `POST` | `/api/tts` | Synthesizes text to speech with Qwen-TTS (returns WAV stream) |
+| `POST` | `/api/tts` | Synthesizes text to speech with Kokoro-TTS (returns WAV stream; optional `play_audio`) |
+| `POST` | `/api/tts/generate` | **Direct TTS Tool:** Synthesizes text to speech, returns Base64 audio + latency metrics |
 | `POST` | `/api/interact` | **Full cycle:** Audio In ➔ STT ➔ LLM ➔ TTS ➔ Base64 Audio Out |
 | `POST` | `/api/interact/stream` | Full cycle with SSE token + sentence-audio chunk events |
 | `POST` | `/api/record` | Triggers host microphone capture and runs the pipeline |
-| `WS` | `/ws/assistant` | Real-time bidirectional WebSocket streaming endpoint (`token` frames for word-by-word text) |
+| `WS` | `/ws/assistant` | Real-time bidirectional WebSocket streaming endpoint (supports `audio`, `text`, and direct `tts` frames) |
 
 ---
 

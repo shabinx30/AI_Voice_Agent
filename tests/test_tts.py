@@ -94,3 +94,70 @@ def test_tts_set_device_invalid_raises() -> None:
     with pytest.raises(ValueError, match="Unsupported TTS device"):
         engine.set_device("quantum")
 
+
+def test_cli_direct_tts(tmp_path) -> None:
+    """Verifies that CLI run_direct_tts synthesizes and writes audio file."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    from cli import run_direct_tts
+    from app.core.pipeline import AssistantResponse, PipelineMetrics
+
+    out_file = str(tmp_path / "test_speech.wav")
+    fake_wav_bytes = b"RIFFfakeWAVEfmt "
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.tts.speaker = "af_heart"
+    mock_pipeline.process_direct_tts = AsyncMock(
+        return_value=AssistantResponse(
+            user_text="Synthesize this text",
+            assistant_text="Synthesize this text",
+            audio_bytes=fake_wav_bytes,
+            sample_rate=24000,
+            metrics=PipelineMetrics(tts_latency_ms=25.0, tts_realtime_factor=4.0),
+        )
+    )
+
+    asyncio.run(
+        run_direct_tts(
+            pipeline=mock_pipeline,
+            text="Synthesize this text",
+            speaker="af_heart",
+            output_file=out_file,
+            play_audio=False,
+        )
+    )
+
+    mock_pipeline.process_direct_tts.assert_called_once_with(
+        text="Synthesize this text",
+        speaker="af_heart",
+        play_audio=False,
+        tts_device=None,
+    )
+
+    with open(out_file, "rb") as f:
+        assert f.read() == fake_wav_bytes
+
+
+def test_cli_tts_mode_dispatch(monkeypatch) -> None:
+    """Verifies CLI argument dispatcher executes direct TTS when --mode tts --text is given."""
+    import sys
+    from unittest.mock import MagicMock, patch
+    import cli
+
+    test_args = ["cli.py", "--mode", "tts", "--text", "Hello world", "--no-play"]
+    monkeypatch.setattr(sys, "argv", test_args)
+
+    with patch("cli.AssistantPipeline") as mock_pipeline_cls, \
+         patch("cli.run_direct_tts", return_value=None) as mock_run_direct:
+        mock_inst = MagicMock()
+        mock_pipeline_cls.return_value = mock_inst
+
+        cli.main()
+
+        mock_inst.tts.load_model.assert_called_once()
+        mock_run_direct.assert_called_once()
+        call_kwargs = mock_run_direct.call_args.kwargs
+        assert call_kwargs.get("text") == "Hello world"
+        assert call_kwargs.get("play_audio") is False
+
+

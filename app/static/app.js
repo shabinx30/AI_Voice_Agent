@@ -12,6 +12,11 @@ const micIcon = document.getElementById('mic-icon');
 const stopIcon = document.getElementById('stop-icon');
 const textInput = document.getElementById('text-prompt-input');
 const sendBtn = document.getElementById('send-btn');
+const ttsBtn = document.getElementById('tts-btn');
+const modeTabAssistant = document.getElementById('mode-tab-assistant');
+const modeTabTTS = document.getElementById('mode-tab-tts');
+const modeHintText = document.getElementById('mode-hint-text');
+let activeInteractionMode = 'assistant';
 const chatContainer = document.getElementById('chat-messages');
 const waveformCanvas = document.getElementById('waveform-canvas');
 const recordingTimer = document.getElementById('recording-timer');
@@ -813,6 +818,11 @@ async function handleHttpAudioFallback(blob, userMsgEl, assistantMsgEl) {
 
 // Text Input Handling
 async function handleTextSubmit() {
+  if (activeInteractionMode === 'tts') {
+    handleDirectTTSSubmit();
+    return;
+  }
+
   const text = textInput.value.trim();
   if (!text) return;
 
@@ -841,6 +851,78 @@ async function handleTextSubmit() {
   } else {
     // HTTP Fallback
     handleHttpTextFallback(text, activeAssistantBubble);
+  }
+}
+
+// Standalone Direct TTS Handler
+async function handleDirectTTSSubmit() {
+  const text = textInput.value.trim();
+  if (!text) return;
+
+  textInput.value = '';
+  appendMessage('user', text);
+  systemStatusText.textContent = 'Synthesizing speech with Kokoro TTS...';
+
+  streamAudioQueue.getAudioContext();
+  streamAudioQueue.reset();
+
+  activeUserBubble = null;
+  activeAssistantBubble = appendMessage('assistant', '<span class="status-placeholder">Synthesizing speech with Kokoro-82M...</span>');
+  currentSentenceCount = 0;
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'tts',
+      text: text,
+      speaker: speakerSelect.value,
+      play_audio: playHostAudio.checked,
+      tts_device: activeTtsDevice,
+    }));
+  } else {
+    // HTTP Fallback to /api/tts/generate
+    handleHttpTTSFallback(text, activeAssistantBubble);
+  }
+}
+
+async function handleHttpTTSFallback(text, assistantMsgEl) {
+  try {
+    const res = await fetch('/api/tts/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: text,
+        speaker: speakerSelect.value,
+        device: activeTtsDevice,
+        play_audio: playHostAudio.checked,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'TTS generation failed');
+    }
+
+    const data = await res.json();
+    assistantMsgEl.querySelector('.msg-text').textContent = data.assistant_text || text;
+
+    if (data.audio_base64) {
+      const audioUrl = `data:audio/wav;base64,${data.audio_base64}`;
+      attachAudioButton(assistantMsgEl, audioUrl, true);
+      if (!playHostAudio.checked) {
+        audioPlayer.src = audioUrl;
+        audioPlayer.play().catch(() => {});
+      }
+    }
+
+    if (data.metrics) {
+      updateMetrics(data.metrics);
+    }
+
+    systemStatusText.textContent = 'All Pipelines Active • Ready for Voice Input';
+  } catch (err) {
+    console.error('HTTP TTS fallback error:', err);
+    assistantMsgEl.querySelector('.msg-text').textContent = `Error: ${err.message}`;
+    systemStatusText.textContent = 'Failed to synthesize speech.';
   }
 }
 
@@ -977,7 +1059,7 @@ function appendMessage(role, text) {
   return msgDiv;
 }
 
-function attachAudioButton(msgDiv, audioUrl) {
+function attachAudioButton(msgDiv, audioUrl, isTTS = false) {
   const bubble = msgDiv.querySelector('.msg-bubble');
   if (bubble.querySelector('.audio-controls')) return;
 
@@ -990,7 +1072,7 @@ function attachAudioButton(msgDiv, audioUrl) {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
       <polygon points="5 3 19 12 5 21 5 3"></polygon>
     </svg>
-    Replay Full Audio
+    ${isTTS ? 'Play Audio' : 'Replay Full Audio'}
   `;
 
   playBtn.addEventListener('click', () => {
@@ -999,7 +1081,19 @@ function attachAudioButton(msgDiv, audioUrl) {
     audioPlayer.play();
   });
 
+  const downloadBtn = document.createElement('a');
+  downloadBtn.className = 'download-bubble-btn';
+  downloadBtn.href = audioUrl;
+  downloadBtn.download = `kokoro_${Date.now()}.wav`;
+  downloadBtn.innerHTML = `
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+    </svg>
+    WAV
+  `;
+
   controls.appendChild(playBtn);
+  controls.appendChild(downloadBtn);
   bubble.appendChild(controls);
 }
 
@@ -1164,6 +1258,29 @@ micBtn.addEventListener('click', () => {
 });
 
 sendBtn.addEventListener('click', handleTextSubmit);
+if (ttsBtn) ttsBtn.addEventListener('click', handleDirectTTSSubmit);
+
+function setInteractionMode(mode) {
+  activeInteractionMode = mode;
+  if (modeTabAssistant) modeTabAssistant.classList.toggle('active', mode === 'assistant');
+  if (modeTabTTS) modeTabTTS.classList.toggle('active', mode === 'tts');
+  if (modeHintText) {
+    modeHintText.textContent =
+      mode === 'tts'
+        ? 'Kokoro-82M direct speech synthesis (bypasses LLM)'
+        : 'Conversational voice & text agent';
+  }
+  if (textInput) {
+    textInput.placeholder =
+      mode === 'tts'
+        ? 'Type text to synthesize and speak directly with Kokoro TTS...'
+        : 'Type a message or click mic to talk...';
+  }
+}
+
+if (modeTabAssistant) modeTabAssistant.addEventListener('click', () => setInteractionMode('assistant'));
+if (modeTabTTS) modeTabTTS.addEventListener('click', () => setInteractionMode('tts'));
+
 textInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') handleTextSubmit();
 });
