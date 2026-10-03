@@ -236,6 +236,65 @@ def test_llm_eject_model_mocked() -> None:
     asyncio.run(_test())
 
 
+def test_model_supports_thinking() -> None:
+    """Verifies heuristic detection of reasoning models."""
+    from app.core.llm import model_supports_thinking
+
+    assert model_supports_thinking("deepseek-r1-distill-qwen-7b") is True
+    assert model_supports_thinking("deepseek-r1") is True
+    assert model_supports_thinking("qwen3-8b") is True
+    assert model_supports_thinking("qwq-32b") is True
+    assert model_supports_thinking({"id": "custom", "architecture": "qwen3"}) is True
+    assert model_supports_thinking({"id": "custom", "name": "DeepSeek R1 GGUF"}) is True
+    assert model_supports_thinking("qwen2.5-0.5b-instruct") is False
+    assert model_supports_thinking("llama-3.2-1b-instruct") is False
+
+
+def test_stream_tokens_think_mode_and_tags() -> None:
+    """Verifies stream_tokens parses reasoning deltas and <think> tags."""
+    async def _test() -> None:
+        client = LMStudioClient()
+
+        # Simulated SSE chunks containing native reasoning_content
+        lines = [
+            'data: {"choices":[{"delta":{"reasoning_content":"Let me think"}}]}',
+            'data: {"choices":[{"delta":{"reasoning_content":" carefully."}}]}',
+            'data: {"choices":[{"delta":{"content":"The answer is 42."}}]}',
+            'data: [DONE]',
+        ]
+
+        class DummyStreamResponse:
+            def raise_for_status(self):
+                pass
+            async def aiter_lines(self):
+                for l in lines:
+                    yield l
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                pass
+
+        class DummyHttpClient:
+            def stream(self, method, url, **kwargs):
+                return DummyStreamResponse()
+
+        client._http_client = DummyHttpClient()
+
+        # With think_mode=True
+        tokens = [t async for t in client.stream_tokens("What is 6*7?", think_mode=True)]
+        assert ("thought", "Let me think") in tokens
+        assert ("thought", " carefully.") in tokens
+        assert ("content", "The answer is 42.") in tokens
+
+        # With think_mode=False, reasoning is suppressed
+        tokens_no_think = [t async for t in client.stream_tokens("What is 6*7?", think_mode=False)]
+        assert not any(t[0] == "thought" for t in tokens_no_think)
+        assert ("content", "The answer is 42.") in tokens_no_think
+
+    asyncio.run(_test())
+
+
+
 
 
 

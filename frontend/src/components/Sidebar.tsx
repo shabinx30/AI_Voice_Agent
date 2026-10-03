@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Mic, RefreshCw, Cpu, Sparkles, Bot, Eject, Zap } from "lucide-react";
+import { Mic, RefreshCw, Cpu, Sparkles, Bot, Eject, Zap, Brain } from "lucide-react";
 import { HealthStatus, LMStudioModelInfo } from "@/lib/types";
 
 interface SidebarProps {
@@ -26,6 +26,11 @@ interface SidebarProps {
   onRefreshHealth: () => void;
   isOpenMobile?: boolean;
   onCloseMobile?: () => void;
+  thinkMode?: boolean;
+  onToggleThinkMode?: (enabled?: boolean, effort?: string) => void;
+  supportsThinking?: boolean;
+  reasoningEffort?: string;
+  onChangeReasoningEffort?: (effort: string) => void;
 }
 
 export function Sidebar({
@@ -50,6 +55,11 @@ export function Sidebar({
   onRefreshHealth,
   isOpenMobile,
   onCloseMobile,
+  thinkMode,
+  onToggleThinkMode,
+  supportsThinking,
+  reasoningEffort,
+  onChangeReasoningEffort,
 }: SidebarProps) {
   // Helper to format speaker names nicely
   const formatSpeakerName = (spk: string) => {
@@ -412,6 +422,81 @@ export function Sidebar({
               <span>{activeModelInfo.size_formatted ? `Size: ${activeModelInfo.size_formatted}` : ""}</span>
             </div>
           )}
+        </div>
+
+        {/* Think Mode & Reasoning Controls Card */}
+        <div className="p-3 rounded-xl bg-neutral-100 border border-neutral-200 flex flex-col gap-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Brain className={`w-3.5 h-3.5 ${thinkMode ? "text-violet-600" : "text-neutral-500"}`} />
+              <span className="text-xs font-semibold text-black">Think Mode</span>
+            </div>
+            {supportsThinking ? (
+              <span className="text-[10px] font-mono text-violet-700 bg-violet-50 border border-violet-200 px-1.5 py-0.5 rounded font-medium">
+                Reasoning Model
+              </span>
+            ) : (
+              <span className="text-[10px] font-mono text-neutral-500 bg-neutral-200/60 px-1.5 py-0.5 rounded">
+                Standard Model
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-neutral-600 text-[11px]">Stream LLM reasoning chain</span>
+            <button
+              type="button"
+              id="sidebar-think-mode-toggle"
+              role="switch"
+              aria-checked={Boolean(thinkMode)}
+              onClick={() => onToggleThinkMode?.(!thinkMode)}
+              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                thinkMode ? "bg-violet-600" : "bg-neutral-300"
+              }`}
+            >
+              <span
+                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                  thinkMode ? "translate-x-4" : "translate-x-0"
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Reasoning Effort Selector */}
+          {thinkMode && (
+            <div className="pt-2 border-t border-neutral-200/80 flex flex-col gap-1.5 animate-in fade-in duration-150">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-neutral-500">Reasoning Effort</span>
+                <span className="text-black font-semibold font-mono uppercase text-[10px]">
+                  {reasoningEffort || "medium"}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 p-0.5 bg-neutral-200/60 rounded-lg">
+                {(["low", "medium", "high"] as const).map((eff) => (
+                  <button
+                    key={eff}
+                    type="button"
+                    onClick={() => onChangeReasoningEffort?.(eff)}
+                    className={`py-1 text-[10px] font-semibold uppercase rounded-md transition-all cursor-pointer ${
+                      (reasoningEffort || "medium") === eff
+                        ? "bg-black text-white shadow-2xs"
+                        : "text-neutral-600 hover:text-black hover:bg-white/60"
+                    }`}
+                  >
+                    {eff}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="text-[10px] text-neutral-500 leading-tight">
+            {thinkMode
+              ? "Thoughts are rendered in an accordion in chat. Speech synthesis reads only the final answer."
+              : supportsThinking
+              ? "Enable to inspect the model's step-by-step reasoning tokens."
+              : "Active model may not emit thoughts, but think mode flag will be sent."}
+          </div>
         </div>
       </div>
 

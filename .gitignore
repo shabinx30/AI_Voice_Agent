@@ -33,6 +33,7 @@ htmlcov/
 
 # Local Environment & Secrets
 .env
+.env.example
 *.local
 
 # Audio temporary files

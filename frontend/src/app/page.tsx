@@ -47,10 +47,39 @@ export default function NexusVoiceApp() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingTokenBuffer, setStreamingTokenBuffer] = useState<string>("");
   const streamingTokenBufferRef = useRef<string>("");
+  const [streamingThoughtBuffer, setStreamingThoughtBuffer] = useState<string>("");
+  const streamingThoughtBufferRef = useRef<string>("");
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
+  const [isThinking, setIsThinking] = useState<boolean>(false);
   const [inputText, setInputText] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [interactionMode, setInteractionMode] = useState<"assistant" | "tts">("assistant");
+
+  // LLM Think Mode & Reasoning state
+  const [thinkMode, setThinkMode] = useState<boolean>(false);
+  const [reasoningEffort, setReasoningEffort] = useState<"low" | "medium" | "high">("medium");
+  const [supportsThinking, setSupportsThinking] = useState<boolean>(false);
+
+  // Helper to detect if a model natively supports thinking/reasoning
+  const checkModelSupportsThinking = useCallback(
+    (modelIdOrInfo: string | LMStudioModelInfo | undefined): boolean => {
+      if (!modelIdOrInfo) return false;
+      if (typeof modelIdOrInfo === "object") {
+        if (modelIdOrInfo.supports_thinking !== undefined) {
+          return Boolean(modelIdOrInfo.supports_thinking);
+        }
+        const text = `${modelIdOrInfo.id} ${modelIdOrInfo.name || ""} ${modelIdOrInfo.architecture || ""}`.toLowerCase();
+        return ["qwen3", "deepseek-r1", "r1", "think", "reason", "qwq", "bonsai", "cot"].some((k) =>
+          text.includes(k)
+        );
+      }
+      const lower = String(modelIdOrInfo).toLowerCase();
+      return ["qwen3", "deepseek-r1", "r1", "think", "reason", "qwq", "bonsai", "cot"].some((k) =>
+        lower.includes(k)
+      );
+    },
+    []
+  );
 
   // Recording state
   const [isRecording, setIsRecording] = useState<boolean>(false);
@@ -103,6 +132,15 @@ export default function NexusVoiceApp() {
       if (data.tts_available_devices && data.tts_available_devices.length > 0) {
         setAvailableTTSDevices(data.tts_available_devices);
       }
+      if (typeof data.think_mode === "boolean") {
+        setThinkMode(data.think_mode);
+      }
+      if (data.reasoning_effort) {
+        setReasoningEffort(data.reasoning_effort as "low" | "medium" | "high");
+      }
+      if (typeof data.current_model_supports_thinking === "boolean") {
+        setSupportsThinking(data.current_model_supports_thinking);
+      }
       setStatusText("All Pipelines Active • Ready for Voice Input");
     } catch (err) {
       console.warn("Health check error:", err);
@@ -128,19 +166,26 @@ export default function NexusVoiceApp() {
       }
       if (data.current_model) {
         setSelectedModel(data.current_model);
+        const curModel = data.models?.find((m) => m.id === data.current_model);
+        if (curModel) {
+          setSupportsThinking(checkModelSupportsThinking(curModel));
+        }
       }
     } catch (err) {
       console.warn("Could not fetch models:", err);
     } finally {
       setIsLoadingModels(false);
     }
-  }, []);
+  }, [checkModelSupportsThinking]);
 
   // Handle Model Switch (guarantees prior model is ejected before loading new model)
   const handleSelectModel = useCallback(
     async (modelId: string) => {
       if (!modelId) return;
       setSelectedModel(modelId);
+      const targetModel = availableModels.find((m) => m.id === modelId);
+      setSupportsThinking(checkModelSupportsThinking(targetModel || modelId));
+
       setStatusText(`Ejecting other models and activating ${modelId}...`);
       try {
         const baseUrl = getApiBaseUrl();
@@ -176,7 +221,64 @@ export default function NexusVoiceApp() {
         setStatusText(`Failed to switch model: ${err}`);
       }
     },
-    [fetchModels]
+    [availableModels, checkModelSupportsThinking, fetchModels]
+  );
+
+  // Handle Think Mode Switch & Reasoning Effort
+  const handleToggleThinkMode = useCallback(
+    async (enabled?: boolean, effort?: string) => {
+      const nextEnabled = enabled !== undefined ? enabled : !thinkMode;
+      const nextEffort = effort || reasoningEffort;
+      setThinkMode(nextEnabled);
+      if (effort) {
+        setReasoningEffort(effort as "low" | "medium" | "high");
+      }
+
+      setStatusText(
+        `Think mode ${nextEnabled ? "enabled" : "disabled"} (effort: ${nextEffort})...`
+      );
+
+      try {
+        const baseUrl = getApiBaseUrl();
+        const res = await fetch(`${baseUrl}/api/llm/think-mode`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            think_mode: nextEnabled,
+            reasoning_effort: nextEffort,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setThinkMode(data.think_mode);
+          setReasoningEffort(data.reasoning_effort);
+          if (typeof data.supports_thinking === "boolean") {
+            setSupportsThinking(data.supports_thinking);
+          }
+          setStatusText(
+            data.message ||
+              `Think Mode ${data.think_mode ? "Enabled" : "Disabled"}${
+                data.supports_thinking ? " (Reasoning Model)" : ""
+              }`
+          );
+        }
+
+        // Notify WebSocket if connected
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(
+            JSON.stringify({
+              type: "set_think_mode",
+              think_mode: nextEnabled,
+              reasoning_effort: nextEffort,
+            })
+          );
+        }
+      } catch (err) {
+        console.error("Failed to update think mode:", err);
+        setStatusText(`Failed to update think mode: ${err}`);
+      }
+    },
+    [thinkMode, reasoningEffort]
   );
 
   // Handle Model Eject (unloads model from memory to free VRAM)
@@ -336,6 +438,35 @@ export default function NexusVoiceApp() {
         return;
       }
 
+      if (msg.type === "think_mode") {
+        if (typeof msg.think_mode === "boolean") {
+          setThinkMode(msg.think_mode);
+        }
+        if (msg.reasoning_effort) {
+          setReasoningEffort(msg.reasoning_effort as "low" | "medium" | "high");
+        }
+        if (typeof msg.supports_thinking === "boolean") {
+          setSupportsThinking(msg.supports_thinking);
+        }
+        return;
+      }
+
+      if (msg.type === "think_mode_changed") {
+        if (typeof msg.think_mode === "boolean") {
+          setThinkMode(msg.think_mode);
+        }
+        if (msg.reasoning_effort) {
+          setReasoningEffort(msg.reasoning_effort as "low" | "medium" | "high");
+        }
+        if (typeof msg.supports_thinking === "boolean") {
+          setSupportsThinking(msg.supports_thinking);
+        }
+        if (msg.message) {
+          setStatusText(msg.message);
+        }
+        return;
+      }
+
       if (msg.type === "transcription") {
         setStatusText("Speech transcribed • Streaming reply from LM Studio...");
         // Update user message text
@@ -353,8 +484,18 @@ export default function NexusVoiceApp() {
         return;
       }
 
+      if (msg.type === "thought") {
+        setIsStreaming(true);
+        setIsThinking(true);
+        const thoughtDelta = msg.text || "";
+        streamingThoughtBufferRef.current += thoughtDelta;
+        setStreamingThoughtBuffer((prev) => prev + thoughtDelta);
+        return;
+      }
+
       if (msg.type === "token") {
         setIsStreaming(true);
+        setIsThinking(false);
         streamingTokenBufferRef.current += (msg.text || "");
         setStreamingTokenBuffer((prev) => prev + (msg.text || ""));
         return;
@@ -370,10 +511,14 @@ export default function NexusVoiceApp() {
 
       if (msg.type === "result") {
         setIsStreaming(false);
+        setIsThinking(false);
         setIsProcessing(false);
         const streamedText = streamingTokenBufferRef.current;
+        const streamedThought = streamingThoughtBufferRef.current;
         streamingTokenBufferRef.current = "";
+        streamingThoughtBufferRef.current = "";
         setStreamingTokenBuffer("");
+        setStreamingThoughtBuffer("");
 
         if (msg.metrics) {
           setMetrics(msg.metrics);
@@ -395,11 +540,15 @@ export default function NexusVoiceApp() {
             ) {
               finalText = streamedText;
             }
+            const finalThought =
+              msg.assistant_thought || streamedThought || updated[lastAssistantIdx].thought;
             updated[lastAssistantIdx] = {
               ...updated[lastAssistantIdx],
               text: finalText,
+              thought: finalThought,
               audioBase64: msg.audio_base64,
               isStreaming: false,
+              isThinking: false,
             };
           }
           const lastUserIdx = updated.findLastIndex((m) => m.role === "user");
@@ -416,9 +565,12 @@ export default function NexusVoiceApp() {
 
       if (msg.type === "error") {
         setIsStreaming(false);
+        setIsThinking(false);
         setIsProcessing(false);
         streamingTokenBufferRef.current = "";
+        streamingThoughtBufferRef.current = "";
         setStreamingTokenBuffer("");
+        setStreamingThoughtBuffer("");
         setStatusText(`Error: ${msg.message}`);
 
         setMessages((prev) => {
@@ -431,6 +583,7 @@ export default function NexusVoiceApp() {
               ...updated[lastAssistantIdx],
               text: `Error: ${msg.message}`,
               isStreaming: false,
+              isThinking: false,
             };
           }
           return updated;
@@ -674,6 +827,7 @@ export default function NexusVoiceApp() {
           play_audio: playHostAudio,
           model: selectedModel,
           tts_device: selectedTTSDevice,
+          think_mode: thinkMode,
         })
       );
     } else {
@@ -692,6 +846,7 @@ export default function NexusVoiceApp() {
     formData.append("speaker", selectedSpeaker);
     formData.append("play_audio", String(playHostAudio));
     formData.append("tts_device", selectedTTSDevice);
+    formData.append("think_mode", String(thinkMode));
 
     try {
       const baseUrl = getApiBaseUrl();
@@ -713,8 +868,10 @@ export default function NexusVoiceApp() {
             return {
               ...msg,
               text: data.assistant_text,
+              thought: data.assistant_thought,
               audioBase64: data.audio_base64,
               isStreaming: false,
+              isThinking: false,
             };
           }
           if (msg.role === "user" && msg.text === "Processing speech...") {
@@ -739,7 +896,7 @@ export default function NexusVoiceApp() {
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === assistantMsgId
-            ? { ...msg, text: `Error: ${errMsg}`, isStreaming: false }
+            ? { ...msg, text: `Error: ${errMsg}`, isStreaming: false, isThinking: false }
             : msg
         )
       );
@@ -758,7 +915,10 @@ export default function NexusVoiceApp() {
     setIsProcessing(true);
     setStatusText("Streaming reply and synthesizing speech...");
     streamingTokenBufferRef.current = "";
+    streamingThoughtBufferRef.current = "";
     setStreamingTokenBuffer("");
+    setStreamingThoughtBuffer("");
+    setIsThinking(false);
 
     audioQueueRef.current?.reset();
 
@@ -778,6 +938,7 @@ export default function NexusVoiceApp() {
         role: "assistant",
         text: "",
         isStreaming: true,
+        isThinking: false,
         timestamp: Date.now(),
       },
     ]);
@@ -791,6 +952,7 @@ export default function NexusVoiceApp() {
           play_audio: playHostAudio,
           model: selectedModel,
           tts_device: selectedTTSDevice,
+          think_mode: thinkMode,
         })
       );
     } else {
@@ -926,7 +1088,11 @@ export default function NexusVoiceApp() {
       const res = await fetch(`${baseUrl}/api/chat/tokens`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: promptText, model: selectedModel }),
+        body: JSON.stringify({
+          message: promptText,
+          model: selectedModel,
+          think_mode: thinkMode,
+        }),
       });
 
       if (!res.ok || !res.body) {
@@ -937,6 +1103,7 @@ export default function NexusVoiceApp() {
       const decoder = new TextDecoder();
       let buf = "";
       let fullText = "";
+      let fullThought = "";
 
       for (;;) {
         const { done, value } = await reader.read();
@@ -956,8 +1123,16 @@ export default function NexusVoiceApp() {
 
             try {
               const evt = JSON.parse(dataStr);
-              if (evt.token) {
+              if (evt.type === "thought" || evt.thought) {
+                const thoughtDelta = evt.thought || evt.token || "";
+                fullThought += thoughtDelta;
+                streamingThoughtBufferRef.current = fullThought;
+                setStreamingThoughtBuffer(fullThought);
+                setIsThinking(true);
+              } else if (evt.token) {
+                setIsThinking(false);
                 fullText += evt.token;
+                streamingTokenBufferRef.current = fullText;
                 setStreamingTokenBuffer(fullText);
               }
             } catch {
@@ -968,10 +1143,18 @@ export default function NexusVoiceApp() {
       }
 
       setStreamingTokenBuffer("");
+      setStreamingThoughtBuffer("");
+      setIsThinking(false);
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === assistantMsgId
-            ? { ...msg, text: fullText, isStreaming: false }
+            ? {
+                ...msg,
+                text: fullText,
+                thought: fullThought || undefined,
+                isStreaming: false,
+                isThinking: false,
+              }
             : msg
         )
       );
@@ -1061,6 +1244,11 @@ export default function NexusVoiceApp() {
         onRefreshHealth={checkHealth}
         isOpenMobile={mobileSidebarOpen}
         onCloseMobile={() => setMobileSidebarOpen(false)}
+        thinkMode={thinkMode}
+        onToggleThinkMode={handleToggleThinkMode}
+        supportsThinking={supportsThinking}
+        reasoningEffort={reasoningEffort}
+        onChangeReasoningEffort={(eff) => handleToggleThinkMode(thinkMode, eff)}
       />
 
       {/* Main Content Area */}
@@ -1072,13 +1260,19 @@ export default function NexusVoiceApp() {
           onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
           ttsDevice={selectedTTSDevice}
           onSelectTTSDevice={handleSelectTTSDevice}
+          thinkMode={thinkMode}
+          onToggleThinkMode={() => handleToggleThinkMode()}
+          supportsThinking={supportsThinking}
+          reasoningEffort={reasoningEffort}
         />
 
         {/* Chat Area Component */}
         <ChatArea
           messages={messages}
           streamingTokenBuffer={streamingTokenBuffer}
+          streamingThoughtBuffer={streamingThoughtBuffer}
           isStreaming={isStreaming}
+          isThinking={isThinking}
           onReplayAudio={handleReplayAudio}
         />
 

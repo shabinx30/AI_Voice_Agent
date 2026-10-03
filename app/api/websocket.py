@@ -171,6 +171,39 @@ async def websocket_assistant_endpoint(websocket: WebSocket) -> None:
                     await websocket.send_json({"type": "error", "message": f"Could not set TTS device: {exc}"})
                 continue
 
+            if msg_type == "get_think_mode":
+                try:
+                    info = ws_pipeline.get_think_mode()
+                    await websocket.send_json({
+                        "type": "think_mode",
+                        "think_mode": info["think_mode"],
+                        "reasoning_effort": info["reasoning_effort"],
+                        "supports_thinking": info["supports_thinking"],
+                    })
+                except Exception as exc:
+                    await websocket.send_json({"type": "error", "message": f"Could not get think mode: {exc}"})
+                continue
+
+            if msg_type == "set_think_mode":
+                think_mode_val = data.get("think_mode")
+                effort_val = data.get("reasoning_effort")
+                try:
+                    info = ws_pipeline.set_think_mode(
+                        enabled=think_mode_val,
+                        effort=effort_val,
+                    )
+                    await websocket.send_json({
+                        "type": "think_mode_changed",
+                        "status": "success",
+                        "think_mode": info["think_mode"],
+                        "reasoning_effort": info["reasoning_effort"],
+                        "supports_thinking": info["supports_thinking"],
+                        "message": f"Think mode set to {'enabled' if info['think_mode'] else 'disabled'} (effort: {info['reasoning_effort']})",
+                    })
+                except Exception as exc:
+                    await websocket.send_json({"type": "error", "message": f"Could not set think mode: {exc}"})
+                continue
+
             if msg_type == "audio":
                 req_model = data.get("model")
                 if req_model and req_model != ws_pipeline.llm.model:
@@ -184,6 +217,7 @@ async def websocket_assistant_endpoint(websocket: WebSocket) -> None:
                         ws_pipeline.set_tts_device(req_tts_device)
                     except Exception:
                         pass
+                req_think_mode = data.get("think_mode")
                 audio_b64 = data.get("data", "")
                 speaker = data.get("speaker")
                 play_host = data.get("play_audio", False)
@@ -232,6 +266,14 @@ async def websocket_assistant_endpoint(websocket: WebSocket) -> None:
                             }
                         )
 
+                    async def _send_thought(thought_text: str) -> None:
+                        await websocket.send_json(
+                            {
+                                "type": "thought",
+                                "text": thought_text,
+                            }
+                        )
+
                     audio_bytes = base64.b64decode(audio_b64)
                     res = await ws_pipeline.process_audio_bytes(
                         audio_bytes=audio_bytes,
@@ -239,7 +281,9 @@ async def websocket_assistant_endpoint(websocket: WebSocket) -> None:
                         play_audio=play_host,
                         on_chunk=_send_audio_chunk,
                         on_token=_send_token,
+                        on_thought=_send_thought,
                         on_transcription=_send_transcription,
+                        think_mode=req_think_mode,
                         session_id=session_id,
                     )
 
@@ -248,6 +292,7 @@ async def websocket_assistant_endpoint(websocket: WebSocket) -> None:
                             "type": "result",
                             "user_text": res.user_text,
                             "assistant_text": res.assistant_text,
+                            "assistant_thought": res.assistant_thought,
                             "audio_base64": base64.b64encode(
                                 res.audio_bytes
                             ).decode("utf-8"),
@@ -273,6 +318,7 @@ async def websocket_assistant_endpoint(websocket: WebSocket) -> None:
                         ws_pipeline.set_tts_device(req_tts_device)
                     except Exception:
                         pass
+                req_think_mode = data.get("think_mode")
                 prompt = data.get("prompt", "")
                 speaker = data.get("speaker")
                 play_host = data.get("play_audio", False)
@@ -307,12 +353,22 @@ async def websocket_assistant_endpoint(websocket: WebSocket) -> None:
                             }
                         )
 
+                    async def _send_text_thought(thought_text: str) -> None:
+                        await websocket.send_json(
+                            {
+                                "type": "thought",
+                                "text": thought_text,
+                            }
+                        )
+
                     res = await ws_pipeline.process_text_prompt(
                         prompt=prompt,
                         speaker=speaker,
                         play_audio=play_host,
                         on_chunk=_send_text_chunk,
                         on_token=_send_token,
+                        on_thought=_send_text_thought,
+                        think_mode=req_think_mode,
                         session_id=session_id,
                     )
 
@@ -321,6 +377,7 @@ async def websocket_assistant_endpoint(websocket: WebSocket) -> None:
                             "type": "result",
                             "user_text": res.user_text,
                             "assistant_text": res.assistant_text,
+                            "assistant_thought": res.assistant_thought,
                             "audio_base64": base64.b64encode(
                                 res.audio_bytes
                             ).decode("utf-8"),

@@ -482,5 +482,47 @@ def test_websocket_direct_tts() -> None:
             assert received_result, "Did not receive final result frame from WebSocket TTS"
 
 
+def test_think_mode_api_endpoints() -> None:
+    """Verifies GET and POST /api/llm/think-mode endpoints."""
+    # GET think mode
+    resp = client.get("/api/llm/think-mode")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "think_mode" in data
+    assert "supports_thinking" in data
+    assert "reasoning_effort" in data
+
+    # POST think mode enable
+    resp = client.post("/api/llm/think-mode", json={"think_mode": True, "reasoning_effort": "high"})
+    assert resp.status_code == 200
+    res_data = resp.json()
+    assert res_data["think_mode"] is True
+    assert res_data["reasoning_effort"] == "high"
+
+    # POST think mode disable
+    resp = client.post("/api/llm/think-mode", json={"think_mode": False})
+    assert resp.status_code == 200
+    assert resp.json()["think_mode"] is False
+
+
+def test_websocket_think_mode_control() -> None:
+    """Verifies WebSocket get_think_mode and set_think_mode frames."""
+    with client.websocket_connect("/ws/assistant") as websocket:
+        # Request current think mode
+        websocket.send_json({"type": "get_think_mode"})
+        msg = websocket.receive_json()
+        assert msg["type"] == "think_mode"
+        assert "think_mode" in msg
+        assert "supports_thinking" in msg
+
+        # Update think mode
+        websocket.send_json({"type": "set_think_mode", "think_mode": True, "reasoning_effort": "medium"})
+        msg = websocket.receive_json()
+        assert msg["type"] == "think_mode_changed"
+        assert msg["think_mode"] is True
+        assert msg["reasoning_effort"] == "medium"
+
+
+
 
 

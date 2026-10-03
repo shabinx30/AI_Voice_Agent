@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Menu, Zap, Timer } from "lucide-react";
+import { Menu, Zap, Timer, Brain } from "lucide-react";
 import { LatencyMetrics } from "@/lib/types";
 
 interface TopbarProps {
@@ -10,6 +10,10 @@ interface TopbarProps {
   onOpenMobileSidebar: () => void;
   ttsDevice?: string;
   onSelectTTSDevice?: (device: string) => void;
+  thinkMode?: boolean;
+  onToggleThinkMode?: () => void;
+  supportsThinking?: boolean;
+  reasoningEffort?: string;
 }
 
 export function Topbar({
@@ -18,6 +22,10 @@ export function Topbar({
   onOpenMobileSidebar,
   ttsDevice,
   onSelectTTSDevice,
+  thinkMode,
+  onToggleThinkMode,
+  supportsThinking,
+  reasoningEffort,
 }: TopbarProps) {
   return (
     <header className="glass-panel shrink-0 flex items-center justify-between px-5 py-3.5 gap-4 bg-white border border-neutral-200 shadow-xs">
@@ -89,6 +97,38 @@ export function Topbar({
             <span className="text-black font-bold uppercase">
               {ttsDevice.toLowerCase() === "npu_only" ? "NPU (FULL)" : ttsDevice}
             </span>
+          </button>
+        )}
+
+        {/* LLM Think Mode Toggle Button */}
+        {onToggleThinkMode && (
+          <button
+            type="button"
+            id="think-mode-topbar-btn"
+            onClick={onToggleThinkMode}
+            className={`px-2 py-1 rounded-md border font-semibold flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer ${
+              thinkMode
+                ? "bg-violet-600 text-white border-violet-700 shadow-violet-200"
+                : "bg-neutral-100 hover:bg-neutral-200 border-neutral-300 text-neutral-700 hover:text-black"
+            }`}
+            title={
+              supportsThinking
+                ? `Think Mode: ${thinkMode ? "ON (" + (reasoningEffort || "medium") + " effort)" : "OFF"}. Click to toggle reasoning tokens.`
+                : "Current model does not natively support reasoning. Click to toggle think mode."
+            }
+          >
+            <Brain className={`w-3.5 h-3.5 ${thinkMode ? "text-violet-200 animate-pulse" : "text-neutral-500"}`} />
+            <span className="text-[10px] tracking-wider font-bold">
+              THINK: {thinkMode ? "ON" : "OFF"}
+            </span>
+            {supportsThinking && (
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  thinkMode ? "bg-emerald-300" : "bg-neutral-400"
+                }`}
+                title="Reasoning model detected"
+              />
+            )}
           </button>
         )}
 

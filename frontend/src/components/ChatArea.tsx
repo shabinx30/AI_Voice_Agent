@@ -1,20 +1,82 @@
 "use client";
 
-import React, { useEffect, useRef } from "react";
-import { Bot, User, Play, Volume2, Download } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { Bot, User, Play, Volume2, Download, Brain, ChevronDown, ChevronRight } from "lucide-react";
 import { ChatMessage } from "@/lib/types";
 
 interface ChatAreaProps {
   messages: ChatMessage[];
   streamingTokenBuffer: string;
+  streamingThoughtBuffer?: string;
   isStreaming: boolean;
+  isThinking?: boolean;
   onReplayAudio: (audioBase64: string) => void;
+}
+
+function ThinkingAccordion({
+  thought,
+  isLive,
+  defaultOpen,
+}: {
+  thought: string;
+  isLive?: boolean;
+  defaultOpen?: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState<boolean>(defaultOpen ?? Boolean(isLive));
+
+  // Automatically open when reasoning is actively streaming
+  useEffect(() => {
+    if (isLive) {
+      setIsOpen(true);
+    }
+  }, [isLive]);
+
+  const wordCount = thought.trim() ? thought.trim().split(/\s+/).length : 0;
+
+  return (
+    <div className="mb-3 rounded-xl border border-violet-200 bg-violet-50/40 overflow-hidden shadow-2xs transition-all">
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        className="w-full flex items-center justify-between px-3.5 py-2 text-left bg-violet-100/60 hover:bg-violet-100/90 transition-colors cursor-pointer select-none"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <Brain className={`w-3.5 h-3.5 text-violet-600 shrink-0 ${isLive ? "animate-pulse" : ""}`} />
+          <span className="text-xs font-semibold text-violet-950 tracking-tight">
+            Thinking Process
+          </span>
+          {isLive ? (
+            <span className="inline-flex items-center gap-1 text-[10px] font-mono text-violet-700 bg-violet-200/80 px-2 py-0.5 rounded-full font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-violet-600 animate-ping inline-block" />
+              Reasoning...
+            </span>
+          ) : (
+            <span className="text-[10px] font-mono text-neutral-500 bg-white/80 px-1.5 py-0.5 rounded border border-violet-200/60">
+              {wordCount} words
+            </span>
+          )}
+        </div>
+        <div className="text-violet-600 shrink-0 ml-2">
+          {isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+        </div>
+      </button>
+
+      {isOpen && (
+        <div className="p-3.5 text-xs font-mono text-neutral-700 bg-white/90 border-t border-violet-200/70 leading-relaxed whitespace-pre-wrap max-h-80 overflow-y-auto select-text">
+          {thought}
+          {isLive && <span className="stream-caret ml-0.5" />}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ChatArea({
   messages,
   streamingTokenBuffer,
+  streamingThoughtBuffer = "",
   isStreaming,
+  isThinking = false,
   onReplayAudio,
 }: ChatAreaProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -24,7 +86,7 @@ export function ChatArea({
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, streamingTokenBuffer]);
+  }, [messages, streamingTokenBuffer, streamingThoughtBuffer]);
 
   const handleDownloadWav = (base64Audio: string, filename = "speech.wav") => {
     const link = document.createElement("a");
@@ -62,6 +124,13 @@ export function ChatArea({
         const isLastAssistant =
           !isUser && index === messages.length - 1 && isStreaming;
         const isTTS = Boolean(msg.isTTSOnly);
+
+        // Determine thought content for this message
+        const messageThought =
+          msg.thought ||
+          (isLastAssistant && streamingThoughtBuffer ? streamingThoughtBuffer : "");
+        const isMessageCurrentlyThinking =
+          isLastAssistant && Boolean(isThinking || (streamingThoughtBuffer && !streamingTokenBuffer));
 
         return (
           <div
@@ -107,6 +176,12 @@ export function ChatArea({
                       kokoro-82m
                     </span>
                   )}
+                  {msg.thought && !isUser && (
+                    <span className="px-1.5 py-0.2 rounded text-[10px] bg-violet-100 text-violet-700 font-mono flex items-center gap-1">
+                      <Brain className="w-2.5 h-2.5" />
+                      thought
+                    </span>
+                  )}
                 </div>
                 {msg.speaker && !isUser && (
                   <span className="text-[10px] text-neutral-400 font-mono">
@@ -114,6 +189,15 @@ export function ChatArea({
                   </span>
                 )}
               </div>
+
+              {/* Thinking Accordion (Shown if message has reasoning thoughts or is actively reasoning) */}
+              {!isUser && !isTTS && messageThought && (
+                <ThinkingAccordion
+                  thought={messageThought}
+                  isLive={isMessageCurrentlyThinking}
+                  defaultOpen={isMessageCurrentlyThinking}
+                />
+              )}
 
               <div className="text-sm leading-relaxed whitespace-pre-wrap wrap-break-word text-black">
                 {msg.text ? (
@@ -124,10 +208,15 @@ export function ChatArea({
                       {streamingTokenBuffer}
                       <span className="stream-caret" />
                     </span>
+                  ) : isMessageCurrentlyThinking ? (
+                    <span className="text-violet-600/80 italic text-xs flex items-center gap-1.5 font-medium">
+                      <Brain className="w-3.5 h-3.5 text-violet-500 animate-pulse" />
+                      Synthesizing reasoning tokens before formulating answer...
+                    </span>
                   ) : (
                     <span className="text-neutral-500 italic flex items-center gap-1.5">
                       <span className="w-1.5 h-1.5 rounded-full bg-black animate-ping inline-block" />
-                      {isTTS ? "Synthesizing speech..." : "Thinking..."}
+                      {isTTS ? "Synthesizing speech..." : "Generating response..."}
                     </span>
                   )
                 ) : (

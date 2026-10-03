@@ -46,6 +46,8 @@ async def run_streaming_pipeline(
     on_chunk: Optional[Callable[[Any], Any]] = None,
     on_token: Optional[Callable[[str], Any]] = None,
     session_id: str = "default",
+    on_thought: Optional[Callable[[str], Any]] = None,
+    think_mode: Optional[bool] = None,
 ) -> Tuple[str, bytes, int, Any]:
     """Executes one overlapped LLM->TTS->audio turn.
 
@@ -59,6 +61,8 @@ async def run_streaming_pipeline(
         on_chunk: Per-sentence audio callback.
         on_token: Per-token text callback.
         session_id: Session key for history + interruption isolation.
+        on_thought: Per-token reasoning/thought callback.
+        think_mode: Optional override to enable or disable LLM thinking mode.
 
     Returns:
         Tuple (assistant_text, wav_bytes, sample_rate, metrics).
@@ -123,9 +127,20 @@ async def run_streaming_pipeline(
     n_workers = max(1, int(getattr(settings, "tts_max_workers", 2)))
 
     # Single token stream drives both callbacks + sentence split (one LLM pass).
-    # _token_tap_stream already forwards on_token; it returns None for
+    # _token_tap_stream forwards on_token and on_thought; it returns None for
     # non-streaming test doubles, in which case we fall back below.
-    token_gen = pipeline._token_tap_stream(prompt, history_slice, on_token)
+    thought_tokens: List[str] = []
+    try:
+        token_gen = pipeline._token_tap_stream(
+            prompt,
+            history_slice,
+            on_token=on_token,
+            on_thought=on_thought,
+            think_mode=think_mode,
+            thought_accumulator=thought_tokens,
+        )
+    except TypeError:
+        token_gen = pipeline._token_tap_stream(prompt, history_slice, on_token)
     sentence_stream = None
     use_tokens = token_gen is not None
     if not use_tokens:
@@ -141,7 +156,7 @@ async def run_streaming_pipeline(
     sentence_queue: asyncio.Queue = asyncio.Queue(maxsize=qmax)
     results: Dict[int, Tuple[str, np.ndarray, int, float]] = {}
     emit_event = asyncio.Event()
-    state = {
+    state: Dict[str, Any] = {
         "producer_done": False,
         "producer_error": None,
         "total": 0,
@@ -429,7 +444,10 @@ async def run_streaming_pipeline(
             pass
 
     if state["producer_error"] is not None and not ordered_texts:
-        raise state["producer_error"]
+        err = state["producer_error"]
+        if isinstance(err, BaseException):
+            raise err
+        raise RuntimeError(str(err))
     if _cancelled():
         # Interrupted: return partial work so callers can discard quickly.
         metrics.total_latency_ms = round((time.perf_counter() - pipeline_start) * 1000, 2)
@@ -480,6 +498,9 @@ async def run_streaming_pipeline(
         metrics.ttfa_ms = round((time.perf_counter() - pipeline_start) * 1000, 2)
     metrics.voice_latency_ms = lats["voice_latency_ms"] or metrics.ttfa_ms
     _fill_telemetry(pipeline, tracker, metrics, stream_player)
+    assistant_thought = "".join(thought_tokens).strip() or None
+    metrics.assistant_thought = assistant_thought
+    pipeline._last_thought = assistant_thought
     pipeline.last_metrics = metrics
     return assistant_reply, wav_bytes, state["tts_sr"], metrics
 

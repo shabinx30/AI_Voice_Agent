@@ -101,6 +101,14 @@ class Settings(BaseSettings):
         ),
         description="Default system instruction for the LLM",
     )
+    lm_studio_think_mode: bool = Field(
+        default=False,
+        description="Whether reasoning/think mode is enabled for supported models",
+    )
+    lm_studio_reasoning_effort: Literal["low", "medium", "high", "max"] = Field(
+        default="medium",
+        description="Reasoning effort level sent to LM Studio when think mode is enabled",
+    )
 
     # Text-to-Speech (Kokoro TTS) Settings
     tts_model_id: str = Field(

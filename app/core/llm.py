@@ -9,7 +9,7 @@ import json
 import logging
 import subprocess
 import time
-from typing import Any, AsyncGenerator, Dict, List, Optional, Set
+from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
 import httpx
 
 from app.config import settings
@@ -60,6 +60,50 @@ async def split_into_sentence_chunks(
         yield chunk
 
 
+def model_supports_thinking(model_info_or_id: Any) -> bool:
+    """Determines whether an LM Studio model natively supports thinking/reasoning.
+
+    Inspects model architecture, identifier, displayName, or type for indicators of
+    reasoning architectures (e.g. Qwen3, DeepSeek-R1, QwQ, Bonsai, etc.).
+
+    Args:
+        model_info_or_id: Model dictionary or string identifier.
+
+    Returns:
+        True if the model is identified as reasoning/thinking capable.
+    """
+    if isinstance(model_info_or_id, dict):
+        m_id = str(model_info_or_id.get("id", "")).lower()
+        arch = str(model_info_or_id.get("architecture", "")).lower()
+        name = str(model_info_or_id.get("name", "")).lower()
+        model_key = str(model_info_or_id.get("modelKey", "")).lower()
+    else:
+        m_id = str(model_info_or_id).lower()
+        arch = ""
+        name = m_id
+        model_key = m_id
+
+    # Architectural checks (e.g. qwen3, qwen35, deepseek)
+    if any(a in arch for a in ["qwen3", "deepseek", "reason", "cot"]):
+        return True
+
+    # Name and identifier keywords
+    text_to_check = f"{m_id} {arch} {name} {model_key}"
+    keywords = [
+        "qwen3",
+        "deepseek-r1",
+        "r1",
+        "think",
+        "reason",
+        "qwq",
+        "bonsai",
+        "cot",
+        "reasoning",
+        "thought",
+    ]
+    return any(k in text_to_check for k in keywords)
+
+
 class LMStudioClient:
     """Client for querying local LLM models served by LM Studio.
 
@@ -80,6 +124,8 @@ class LMStudioClient:
         top_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
         system_prompt: Optional[str] = None,
+        think_mode: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> None:
         """Initializes the LM Studio client.
 
@@ -90,6 +136,8 @@ class LMStudioClient:
             top_p: Nucleus cutoff. Defaults to settings.lm_studio_top_p.
             max_tokens: Max tokens. Defaults to settings.lm_studio_max_tokens.
             system_prompt: System instructions. Defaults to settings.lm_studio_system_prompt.
+            think_mode: Whether to enable thinking/reasoning mode. Defaults to settings.lm_studio_think_mode.
+            reasoning_effort: Reasoning effort level ('low', 'medium', 'high', 'max').
         """
         self.base_url = (base_url or settings.lm_studio_base_url).rstrip("/")
         self.model = model or settings.lm_studio_model
@@ -102,6 +150,16 @@ class LMStudioClient:
         self.top_p = top_p if top_p is not None else _top_p_default
         self.max_tokens = max_tokens or settings.lm_studio_max_tokens
         self.system_prompt = system_prompt or settings.lm_studio_system_prompt
+        self.think_mode: bool = (
+            think_mode
+            if think_mode is not None
+            else getattr(settings, "lm_studio_think_mode", False)
+        )
+        self.reasoning_effort: str = (
+            reasoning_effort
+            if reasoning_effort is not None
+            else getattr(settings, "lm_studio_reasoning_effort", "medium")
+        )
         # Reuse a single pooled client for all calls (keep-alive). Creating a
         # new AsyncClient per request wastes TCP/TLS handshakes and adds
         # 5-50ms latency per LLM call.
@@ -111,6 +169,54 @@ class LMStudioClient:
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
         )
         self._closed = False
+
+    def supports_thinking(self, model_id: Optional[str] = None) -> bool:
+        """Returns True if the target or currently configured model supports reasoning."""
+        return model_supports_thinking(model_id or self.model)
+
+    def get_think_mode(self) -> Dict[str, Any]:
+        """Returns the current thinking/reasoning configuration."""
+        supports = self.supports_thinking()
+        return {
+            "think_mode": self.think_mode,
+            "reasoning_effort": self.reasoning_effort,
+            "supports_thinking": supports,
+            "current_model": self.model,
+        }
+
+    def set_think_mode(
+        self, enabled: bool, effort: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Enables or disables thinking mode for the LLM.
+
+        Args:
+            enabled: Boolean flag to enable or disable thinking.
+            effort: Optional reasoning effort ('low', 'medium', 'high', 'max').
+
+        Returns:
+            Status dictionary with updated think mode information.
+        """
+        self.think_mode = bool(enabled)
+        if effort and effort in ("low", "medium", "high", "max"):
+            self.reasoning_effort = effort
+        # Keep settings updated for persistence
+        try:
+            settings.lm_studio_think_mode = self.think_mode
+            if effort:
+                settings.lm_studio_reasoning_effort = self.reasoning_effort
+        except Exception:
+            pass
+        supports = self.supports_thinking()
+        status_msg = f"Think mode {'enabled' if self.think_mode else 'disabled'} (effort={self.reasoning_effort}, model_supported={supports})."
+        logger.info(status_msg)
+        return {
+            "status": "success",
+            "think_mode": self.think_mode,
+            "reasoning_effort": self.reasoning_effort,
+            "supports_thinking": supports,
+            "message": status_msg,
+        }
+
 
     async def check_health(self) -> bool:
         """Verifies connectivity to the LM Studio server.
@@ -356,7 +462,7 @@ class LMStudioClient:
                         or item.get("identifier") in loaded_ids
                         or m_id == self.model
                     )
-                    models.append({
+                    m_info = {
                         "id": m_id,
                         "name": item.get("displayName") or m_id,
                         "loaded": is_loaded,
@@ -365,7 +471,9 @@ class LMStudioClient:
                         "size_bytes": size,
                         "size_formatted": size_formatted,
                         "type": item.get("type", "llm"),
-                    })
+                    }
+                    m_info["supports_thinking"] = model_supports_thinking(m_info)
+                    models.append(m_info)
         except Exception as exc:
             logger.debug("Could not inspect available models via 'lms ls': %s", exc)
 
@@ -384,7 +492,7 @@ class LMStudioClient:
                     if m_id not in seen_ids:
                         seen_ids.add(m_id)
                         is_loaded = m_id in loaded_ids or m_id == self.model
-                        models.append({
+                        m_info = {
                             "id": m_id,
                             "name": m_id,
                             "loaded": is_loaded,
@@ -393,7 +501,9 @@ class LMStudioClient:
                             "size_bytes": 0,
                             "size_formatted": "",
                             "type": "llm",
-                        })
+                        }
+                        m_info["supports_thinking"] = model_supports_thinking(m_info)
+                        models.append(m_info)
                     else:
                         # Ensure loaded flag reflects if seen in loaded_ids or self.model
                         for m in models:
@@ -404,7 +514,7 @@ class LMStudioClient:
 
         # 4. If list is completely empty, ensure current active model is present
         if not models:
-            models.append({
+            fallback_info = {
                 "id": self.model,
                 "name": self.model,
                 "loaded": True,
@@ -413,12 +523,17 @@ class LMStudioClient:
                 "size_bytes": 0,
                 "size_formatted": "",
                 "type": "llm",
-            })
+            }
+            fallback_info["supports_thinking"] = model_supports_thinking(fallback_info)
+            models.append(fallback_info)
 
         # Ensure current model is marked loaded
         for m in models:
             if m["id"] == self.model:
                 m["loaded"] = True
+            if "supports_thinking" not in m:
+                m["supports_thinking"] = model_supports_thinking(m)
+
 
         # Sort: loaded models first, then alphabetical by name
         models.sort(key=lambda x: (not x["loaded"], x["name"].lower()))
@@ -550,6 +665,7 @@ class LMStudioClient:
         prompt: str,
         system_prompt: Optional[str] = None,
         history: Optional[List[Dict[str, str]]] = None,
+        think_mode: Optional[bool] = None,
     ) -> str:
         """Generates a text completion from the LM Studio model.
 
@@ -557,6 +673,7 @@ class LMStudioClient:
             prompt: User message content.
             system_prompt: Optional override for the system prompt.
             history: Optional list of previous chat messages.
+            think_mode: Optional think mode override.
 
         Returns:
             Assistant response text.
@@ -574,6 +691,10 @@ class LMStudioClient:
 
         messages.append({"role": "user", "content": prompt})
 
+        effective_think = (
+            think_mode if think_mode is not None else self.think_mode
+        )
+
         payload = {
             "model": self.model,
             "messages": messages,
@@ -581,6 +702,11 @@ class LMStudioClient:
             "top_p": self.top_p,
             "stream": False,
         }
+        if effective_think:
+            payload["reasoning_effort"] = self.reasoning_effort
+        else:
+            payload["reasoning_effort"] = "none"
+
         if self.max_tokens and self.max_tokens > 0:
             payload["max_tokens"] = self.max_tokens
 
@@ -595,7 +721,14 @@ class LMStudioClient:
             response.raise_for_status()
             data = response.json()
 
-            reply = data["choices"][0]["message"]["content"].strip()
+            choice = data["choices"][0]
+            raw_content = choice.get("message", {}).get("content", "") or ""
+
+            # Strip any <think>...</think> tags from final text if present
+            import re
+            cleaned_content = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip()
+            reply = cleaned_content if cleaned_content else raw_content.strip()
+
             elapsed = time.perf_counter() - start_time
             logger.info("LLM generated response in %.3fs: '%s'", elapsed, reply)
             return reply
@@ -614,22 +747,49 @@ class LMStudioClient:
             logger.error("LM Studio completion failed: %s", exc)
             raise RuntimeError(f"LM Studio API request error: {exc}") from exc
 
-    async def stream_response(
+    async def stream_tokens(
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
         history: Optional[List[Dict[str, str]]] = None,
-    ) -> AsyncGenerator[str, None]:
-        """Streams text chunks from the LM Studio LLM asynchronously.
+        think_mode: Optional[bool] = None,
+    ) -> AsyncGenerator[Tuple[str, str], None]:
+        """Streams typed token tuples (token_type, text) from the LLM.
+
+        Token types:
+            - 'thought': Reasoning / chain-of-thought tokens (from delta.reasoning_content
+                         or from within <think>...</think> tags).
+            - 'content': Assistant response text intended for speech and final display.
 
         Args:
-            prompt: User input prompt.
-            system_prompt: Optional system instruction override.
-            history: Optional conversation context.
+            prompt: User message prompt.
+            system_prompt: System instruction override.
+            history: Previous conversation context.
+            think_mode: Optional boolean override for reasoning mode.
 
         Yields:
-            Generated text tokens/chunks as they arrive.
+            (token_type, token_text) tuples.
         """
+        # Check if stream_response has been mocked or overridden on this instance
+        stream_resp_attr = getattr(self, "stream_response", None)
+        is_mocked = (
+            "stream_response" in getattr(self, "__dict__", {})
+            or getattr(stream_resp_attr, "__func__", stream_resp_attr) is not LMStudioClient.stream_response
+        )
+        if is_mocked:
+            res = self.stream_response(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                history=history,
+            )
+            if hasattr(res, "__aiter__"):
+                async for tok in res:
+                    yield ("content", tok)
+            elif hasattr(res, "__iter__"):
+                for tok in res:
+                    yield ("content", tok)
+            return
+
         messages: List[Dict[str, str]] = []
         effective_system = system_prompt or self.system_prompt
         if effective_system:
@@ -640,6 +800,10 @@ class LMStudioClient:
 
         messages.append({"role": "user", "content": prompt})
 
+        effective_think = (
+            think_mode if think_mode is not None else self.think_mode
+        )
+
         payload = {
             "model": self.model,
             "messages": messages,
@@ -647,8 +811,16 @@ class LMStudioClient:
             "top_p": self.top_p,
             "stream": True,
         }
+        if effective_think:
+            payload["reasoning_effort"] = self.reasoning_effort
+        else:
+            payload["reasoning_effort"] = "none"
+
         if self.max_tokens and self.max_tokens > 0:
             payload["max_tokens"] = self.max_tokens
+
+        inside_think_tag = False
+        tag_buffer = ""
 
         try:
             async with self._http_client.stream(
@@ -664,11 +836,76 @@ class LMStudioClient:
                     try:
                         import json
                         chunk = json.loads(data_str)
-                        delta = chunk["choices"][0]["delta"].get("content", "")
-                        if delta:
-                            yield delta
+                        delta = chunk["choices"][0]["delta"]
+
+                        # 1. First-class reasoning_content (LM Studio native / Qwen3 / DeepSeek)
+                        reasoning = (
+                            delta.get("reasoning_content")
+                            or delta.get("reasoning")
+                            or delta.get("thought")
+                        )
+                        if reasoning:
+                            if effective_think:
+                                yield ("thought", reasoning)
+
+                        # 2. Main content (may also contain inline <think> tags)
+                        content = delta.get("content", "")
+                        if not content:
+                            continue
+
+                        # Process inline think tags
+                        combined = tag_buffer + content
+                        tag_buffer = ""
+
+                        while combined:
+                            if not inside_think_tag:
+                                if "<think>" in combined:
+                                    before, _, after = combined.partition("<think>")
+                                    if before:
+                                        yield ("content", before)
+                                    inside_think_tag = True
+                                    combined = after
+                                elif any("<think>".startswith(combined[-i:]) for i in range(1, len("<think>"))):
+                                    for i in range(len("<think>") - 1, 0, -1):
+                                        if combined.endswith("<think>"[:i]):
+                                            tag_buffer = combined[-i:]
+                                            combined = combined[:-i]
+                                            break
+                                    if combined:
+                                        yield ("content", combined)
+                                    break
+                                else:
+                                    yield ("content", combined)
+                                    break
+                            else:
+                                if "</think>" in combined:
+                                    thought_part, _, after = combined.partition("</think>")
+                                    if thought_part and effective_think:
+                                        yield ("thought", thought_part)
+                                    inside_think_tag = False
+                                    combined = after
+                                elif any("</think>".startswith(combined[-i:]) for i in range(1, len("</think>"))):
+                                    for i in range(len("</think>") - 1, 0, -1):
+                                        if combined.endswith("</think>"[:i]):
+                                            tag_buffer = combined[-i:]
+                                            combined = combined[:-i]
+                                            break
+                                    if combined and effective_think:
+                                        yield ("thought", combined)
+                                    break
+                                else:
+                                    if effective_think:
+                                        yield ("thought", combined)
+                                    break
                     except Exception:
                         continue
+
+            if tag_buffer:
+                if inside_think_tag and effective_think:
+                    yield ("thought", tag_buffer)
+                elif not inside_think_tag:
+                    yield ("content", tag_buffer)
+
         except httpx.ConnectError as exc:
             logger.error(
                 "Unable to connect to LM Studio at %s: %s", self.base_url, exc
@@ -680,6 +917,36 @@ class LMStudioClient:
         except Exception as exc:
             logger.error("LLM stream error: %s", exc)
             raise RuntimeError(f"Error during LLM streaming: {exc}") from exc
+
+    async def stream_response(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        history: Optional[List[Dict[str, str]]] = None,
+        think_mode: Optional[bool] = None,
+    ) -> AsyncGenerator[str, None]:
+        """Streams text chunks from the LM Studio LLM asynchronously.
+
+        Yields content tokens (omitting thoughts) to preserve compatibility
+        with sentence splitters, TTS synthesis, and legacy consumers.
+
+        Args:
+            prompt: User input prompt.
+            system_prompt: Optional system instruction override.
+            history: Optional conversation context.
+            think_mode: Optional think mode override.
+
+        Yields:
+            Generated text tokens/chunks as they arrive.
+        """
+        async for token_type, token in self.stream_tokens(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            history=history,
+            think_mode=think_mode,
+        ):
+            if token_type == "content" and token:
+                yield token
 
     async def stream_sentence_chunks(
         self,

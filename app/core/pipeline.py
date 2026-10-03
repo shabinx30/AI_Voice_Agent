@@ -71,6 +71,7 @@ class PipelineMetrics:
     gpu_util_pct: float = 0.0
     gpu_vram_mb: float = 0.0
     npu_status: str = "unknown"
+    assistant_thought: Optional[str] = None
 
 
 @dataclass
@@ -102,6 +103,7 @@ class AssistantResponse:
         audio_bytes: Synthesized WAV audio bytes for playback/download.
         sample_rate: Sample rate in Hz of the synthesized audio.
         metrics: Latency and execution metrics across components.
+        assistant_thought: Optional captured chain-of-thought reasoning from the LLM.
     """
 
     user_text: str
@@ -109,6 +111,7 @@ class AssistantResponse:
     audio_bytes: bytes
     sample_rate: int
     metrics: PipelineMetrics = field(default_factory=PipelineMetrics)
+    assistant_thought: Optional[str] = None
 
 
 def _is_mock(obj: Any) -> bool:
@@ -251,6 +254,30 @@ class AssistantPipeline:
         """Returns the active Kokoro TTS compute processing unit details."""
         return self.tts.get_device_info()
 
+    def get_think_mode(self) -> Dict[str, Any]:
+        """Returns the active LLM think/reasoning configuration."""
+        if hasattr(self.llm, "get_think_mode"):
+            return self.llm.get_think_mode()
+        return {
+            "think_mode": getattr(settings, "lm_studio_think_mode", False),
+            "reasoning_effort": getattr(settings, "lm_studio_reasoning_effort", "medium"),
+            "supports_thinking": False,
+            "current_model": getattr(self.llm, "model", ""),
+        }
+
+    def set_think_mode(
+        self, enabled: bool, effort: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Configures the LLM think/reasoning mode."""
+        if hasattr(self.llm, "set_think_mode"):
+            return self.llm.set_think_mode(enabled, effort)
+        return {
+            "status": "error",
+            "message": "LLM client does not support think mode.",
+            "think_mode": False,
+        }
+
+
     def warmup(self, warm_npu: Optional[bool] = None) -> None:
         """Pre-loads and compiles OpenVINO and TTS models for fast first response.
 
@@ -344,22 +371,73 @@ class AssistantPipeline:
         prompt: str,
         history: List[Dict[str, str]],
         on_token: Optional[Callable[[str], Any]],
+        on_thought: Optional[Callable[[str], Any]] = None,
+        think_mode: Optional[bool] = None,
+        thought_accumulator: Optional[List[str]] = None,
     ):
-        """Builds a token generator that forwards each raw LLM token onward.
+        """Builds a token generator that forwards raw LLM tokens onward.
 
-        The same token stream feeds the sentence splitter for TTS, so text
-        display (word-by-word) and speech synthesis stay driven by a single
-        LLM inference pass.
+        Thought tokens are forwarded to `on_thought` and stored in `thought_accumulator`,
+        while content tokens are forwarded to `on_token` and feed the sentence splitter
+        for TTS synthesis.
 
         Args:
             prompt: User message prompt.
             history: Conversation history slice.
-            on_token: Callback invoked with each raw token string.
+            on_token: Callback invoked with each raw content token string.
+            on_thought: Callback invoked with each reasoning thought token string.
+            think_mode: Optional boolean override for LLM think mode.
+            thought_accumulator: Optional list to collect all thought tokens for the final response.
 
         Returns:
-            Async generator yielding raw LLM tokens, or None when the LLM
-            client exposes no compatible token stream (e.g. test doubles).
+            Async generator yielding raw content LLM tokens for sentence chunking,
+            or None when the LLM client exposes no compatible stream.
         """
+        # 1. Prefer stream_tokens if available (supports both reasoning and content)
+        stream_tokens_fn = getattr(self.llm, "stream_tokens", None)
+        if stream_tokens_fn is not None and callable(stream_tokens_fn) and not _is_mock(stream_tokens_fn):
+            try:
+                typed_stream = stream_tokens_fn(
+                    prompt=prompt, history=history, think_mode=think_mode
+                )
+            except TypeError:
+                try:
+                    typed_stream = stream_tokens_fn(prompt, history)
+                except Exception:
+                    typed_stream = None
+            except Exception:
+                typed_stream = None
+
+            if typed_stream is not None and not _is_mock(typed_stream) and hasattr(typed_stream, "__aiter__"):
+                async def _generate_typed():
+                    async for token_type, token in typed_stream:
+                        if not token:
+                            continue
+                        if token_type == "thought":
+                            if thought_accumulator is not None:
+                                thought_accumulator.append(token)
+                            if on_thought is not None:
+                                try:
+                                    if asyncio.iscoroutinefunction(on_thought):
+                                        await on_thought(token)
+                                    else:
+                                        on_thought(token)
+                                except Exception as th_exc:
+                                    logger.warning("Thought callback error: %s", th_exc)
+                        else:
+                            if on_token is not None:
+                                try:
+                                    if asyncio.iscoroutinefunction(on_token):
+                                        await on_token(token)
+                                    else:
+                                        on_token(token)
+                                except Exception as cb_exc:
+                                    logger.warning("Token callback error: %s", cb_exc)
+                            yield token
+
+                return _generate_typed()
+
+        # 2. Fallback to stream_response (for test mocks and legacy LLM clients)
         fn = getattr(self.llm, "stream_response", None)
         if fn is None or not callable(fn) or _is_mock(fn):
             return None
@@ -465,6 +543,8 @@ class AssistantPipeline:
         on_chunk: Optional[Callable[[AssistantStreamChunk], Any]] = None,
         on_token: Optional[Callable[[str], Any]] = None,
         session_id: str = "default",
+        on_thought: Optional[Callable[[str], Any]] = None,
+        think_mode: Optional[bool] = None,
     ) -> Tuple[str, bytes, int, PipelineMetrics]:
         """Core streaming executor: LM Studio tokens -> sentences -> Kokoro TTS -> playback.
 
@@ -482,6 +562,8 @@ class AssistantPipeline:
             on_token: Optional callback invoked for each raw LLM token as it
                 arrives (drives word-by-word text display in clients).
             session_id: Session key for history isolation and player interruption.
+            on_thought: Optional callback invoked for each reasoning/thought token.
+            think_mode: Optional override to enable or disable LLM thinking mode.
 
         Returns:
             Tuple of (assistant_reply_text, wav_bytes, tts_sr, metrics).
@@ -500,6 +582,8 @@ class AssistantPipeline:
             on_chunk=on_chunk,
             on_token=on_token,
             session_id=session_id,
+            on_thought=on_thought,
+            think_mode=think_mode,
         )
 
     async def process_audio_bytes(
@@ -513,6 +597,8 @@ class AssistantPipeline:
         on_transcription: Optional[Callable[[str], Any]] = None,
         session_id: str = "default",
         tts_device: Optional[str] = None,
+        on_thought: Optional[Callable[[str], Any]] = None,
+        think_mode: Optional[bool] = None,
     ) -> AssistantResponse:
         """Executes the complete voice assistant loop from raw audio bytes.
 
@@ -535,9 +621,11 @@ class AssistantPipeline:
             on_transcription: Optional callback invoked when STT finishes transcribing.
             session_id: Session key isolating conversation history/playback.
             tts_device: Optional compute processing unit override for Kokoro TTS ('cpu' or 'npu').
+            on_thought: Optional callback invoked for each reasoning/thought token.
+            think_mode: Optional override to enable or disable LLM thinking mode.
 
         Returns:
-            AssistantResponse containing user text, assistant text, audio bytes, and metrics.
+            AssistantResponse containing user text, assistant text, audio bytes, metrics, and thoughts.
         """
         if tts_device is not None and str(tts_device).strip().lower() != str(self.tts.device).lower():
             try:
@@ -622,6 +710,8 @@ class AssistantPipeline:
             on_chunk=on_chunk,
             on_token=on_token,
             session_id=session_id,
+            on_thought=on_thought,
+            think_mode=think_mode,
         )
 
         metrics.stt_latency_ms = stt_latency_ms
@@ -659,6 +749,7 @@ class AssistantPipeline:
             audio_bytes=wav_bytes,
             sample_rate=tts_sr,
             metrics=metrics,
+            assistant_thought=getattr(metrics, "assistant_thought", None),
         )
 
     async def process_text_prompt(
@@ -670,6 +761,8 @@ class AssistantPipeline:
         on_chunk: Optional[Callable[[AssistantStreamChunk], Any]] = None,
         on_token: Optional[Callable[[str], Any]] = None,
         session_id: str = "default",
+        on_thought: Optional[Callable[[str], Any]] = None,
+        think_mode: Optional[bool] = None,
     ) -> AssistantResponse:
         """Executes text-to-speech interaction bypassing STT.
 
@@ -685,6 +778,8 @@ class AssistantPipeline:
             on_token: Optional callback invoked for each raw LLM token as it
                 arrives (drives word-by-word text display in clients).
             session_id: Session key isolating conversation history/playback.
+            on_thought: Optional callback invoked for each reasoning/thought token.
+            think_mode: Optional override to enable or disable LLM thinking mode.
 
         Returns:
             AssistantResponse object with consolidated reply and metrics.
@@ -704,6 +799,8 @@ class AssistantPipeline:
             on_chunk=on_chunk,
             on_token=on_token,
             session_id=session_id,
+            on_thought=on_thought,
+            think_mode=think_mode,
         )
 
         metrics.total_latency_ms = round(
@@ -716,6 +813,7 @@ class AssistantPipeline:
             audio_bytes=wav_bytes,
             sample_rate=tts_sr,
             metrics=metrics,
+            assistant_thought=getattr(metrics, "assistant_thought", None),
         )
 
     async def process_direct_tts(

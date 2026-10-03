@@ -44,6 +44,27 @@ class LLMModelInfo(BaseModel):
     size_bytes: Optional[int] = 0
     size_formatted: Optional[str] = ""
     type: str = "llm"
+    supports_thinking: bool = False
+
+
+class ThinkModeRequest(BaseModel):
+    """Request schema for toggling LLM thinking mode."""
+
+    think_mode: bool = Field(..., description="Whether to enable or disable thinking mode")
+    reasoning_effort: Optional[str] = Field(
+        None, description="Reasoning effort level: 'low', 'medium', 'high', 'max'"
+    )
+
+
+class ThinkModeResponse(BaseModel):
+    """Response schema for LLM thinking mode status."""
+
+    status: str = "success"
+    think_mode: bool
+    reasoning_effort: str
+    supports_thinking: bool
+    current_model: str
+    message: str
 
 
 class ModelsResponse(BaseModel):
@@ -97,6 +118,9 @@ class HealthResponse(BaseModel):
     lm_studio_model: str
     lm_studio_models: List[str] = Field(default_factory=list)
     lm_studio_loaded_models: List[str] = Field(default_factory=list)
+    think_mode: bool = False
+    reasoning_effort: Optional[str] = "medium"
+    current_model_supports_thinking: bool = False
     tts_model: str
     tts_speakers: List[str]
     tts_device: str = "cpu"
@@ -138,6 +162,7 @@ class ChatRequest(BaseModel):
     )
     session_id: str = Field(default="default", description="Session key for history isolation")
     model: Optional[str] = Field(None, description="Optional model override")
+    think_mode: Optional[bool] = Field(None, description="Optional think mode override")
 
 
 class ChatResponse(BaseModel):
@@ -145,6 +170,7 @@ class ChatResponse(BaseModel):
 
     response: str
     model: str
+    thought: Optional[str] = None
 
 
 class TTSRequest(BaseModel):
@@ -165,6 +191,8 @@ class InteractResponse(BaseModel):
     audio_base64: str
     sample_rate: int
     metrics: Dict[str, Any]
+    assistant_thought: Optional[str] = None
+
 
 
 class RecordRequest(BaseModel):
@@ -238,6 +266,7 @@ async def get_health() -> HealthResponse:
             lm_loaded = [pipeline.llm.model]
 
     tts_info = pipeline.get_tts_device()
+    think_info = pipeline.get_think_mode()
 
     return HealthResponse(
         status="healthy",
@@ -248,12 +277,44 @@ async def get_health() -> HealthResponse:
         lm_studio_model=pipeline.llm.model,
         lm_studio_models=lm_models,
         lm_studio_loaded_models=lm_loaded,
+        think_mode=think_info.get("think_mode", False),
+        reasoning_effort=think_info.get("reasoning_effort", "medium"),
+        current_model_supports_thinking=think_info.get("supports_thinking", False),
         tts_model=pipeline.tts.model_id,
         tts_speakers=speakers,
         tts_device=tts_info.get("device", "cpu"),
         tts_effective_device=tts_info.get("effective_device"),
         tts_available_devices=tts_info.get("available_devices", ["cpu", "npu"]),
     )
+
+
+@router.get("/llm/think-mode", response_model=ThinkModeResponse)
+async def get_think_mode() -> ThinkModeResponse:
+    """Returns the current LLM thinking/reasoning mode configuration."""
+    info = pipeline.get_think_mode()
+    return ThinkModeResponse(
+        status="success",
+        think_mode=info.get("think_mode", False),
+        reasoning_effort=info.get("reasoning_effort", "medium"),
+        supports_thinking=info.get("supports_thinking", False),
+        current_model=info.get("current_model", pipeline.llm.model),
+        message=f"Think mode is {'enabled' if info.get('think_mode') else 'disabled'}.",
+    )
+
+
+@router.post("/llm/think-mode", response_model=ThinkModeResponse)
+async def set_think_mode(request: ThinkModeRequest) -> ThinkModeResponse:
+    """Configures the LLM thinking/reasoning mode."""
+    res = pipeline.set_think_mode(request.think_mode, request.reasoning_effort)
+    return ThinkModeResponse(
+        status="success",
+        think_mode=res.get("think_mode", request.think_mode),
+        reasoning_effort=res.get("reasoning_effort", "medium"),
+        supports_thinking=res.get("supports_thinking", False),
+        current_model=pipeline.llm.model,
+        message=res.get("message", "Think mode updated."),
+    )
+
 
 
 @router.get("/llm/models", response_model=ModelsResponse)
@@ -502,9 +563,10 @@ async def chat_streaming(request: ChatRequest) -> StreamingResponse:
 async def chat_token_stream(request: ChatRequest) -> StreamingResponse:
     """Streams raw LLM token deltas for word-by-word text display.
 
-    Emits one SSE ``token`` event per generated token as it arrives from
-    LM Studio, ending with ``[DONE]``. On successful completion the full
-    reply is appended to the session history, mirroring ``/api/chat``.
+    Emits SSE ``token`` events for generated tokens as they arrive from
+    LM Studio (with type='thought' for reasoning or type='content' for answers),
+    ending with ``[DONE]``. On successful completion the reply is appended
+    to session history without thoughts.
 
     Args:
         request: Chat message request payload.
@@ -522,16 +584,34 @@ async def chat_token_stream(request: ChatRequest) -> StreamingResponse:
 
         full_reply_parts = []
         try:
-            async for token in pipeline.llm.stream_response(
-                prompt=request.message,
-                system_prompt=request.system_prompt,
-                history=history,
-            ):
-                if not token:
-                    continue
-                full_reply_parts.append(token)
-                payload = json.dumps({"token": token})
-                yield f"data: {payload}\n\n"
+            stream_fn = getattr(pipeline.llm, "stream_tokens", None)
+            if stream_fn is not None and callable(stream_fn):
+                token_stream = stream_fn(
+                    prompt=request.message,
+                    system_prompt=request.system_prompt,
+                    history=history,
+                    think_mode=request.think_mode,
+                )
+                async for token_type, token in token_stream:
+                    if not token:
+                        continue
+                    if token_type == "thought":
+                        payload = json.dumps({"token": token, "thought": token, "type": "thought"})
+                    else:
+                        full_reply_parts.append(token)
+                        payload = json.dumps({"token": token, "type": "content"})
+                    yield f"data: {payload}\n\n"
+            else:
+                async for token in pipeline.llm.stream_response(
+                    prompt=request.message,
+                    system_prompt=request.system_prompt,
+                    history=history,
+                ):
+                    if not token:
+                        continue
+                    full_reply_parts.append(token)
+                    payload = json.dumps({"token": token, "type": "content"})
+                    yield f"data: {payload}\n\n"
             complete_text = "".join(full_reply_parts)
             await pipeline._append_history(
                 request.session_id, request.message, complete_text
@@ -603,6 +683,7 @@ async def generate_tts_speech(request: TTSRequest) -> InteractResponse:
         return InteractResponse(
             user_text=res.user_text,
             assistant_text=res.assistant_text,
+            assistant_thought=res.assistant_thought,
             audio_base64=base64.b64encode(res.audio_bytes).decode("utf-8"),
             sample_rate=res.sample_rate,
             metrics=_metrics_dict(res.metrics),
@@ -623,6 +704,7 @@ async def interact_voice(
     tts_device: Optional[str] = Form(None),
     play_audio: bool = Form(False),
     session_id: str = Form("default"),
+    think_mode: Optional[bool] = Form(None),
 ) -> InteractResponse:
     """Full assistant flow: Audio in -> OpenVINO STT -> LM Studio LLM -> Kokoro-82M TTS.
 
@@ -633,9 +715,10 @@ async def interact_voice(
         tts_device: Optional compute processing unit for Kokoro TTS ('cpu' or 'npu').
         play_audio: Whether the server should output audio to its speakers.
         session_id: Session key for history isolation.
+        think_mode: Optional boolean flag to enable/disable reasoning thinking mode.
 
     Returns:
-        InteractResponse with transcription, bot reply, audio, and metrics.
+        InteractResponse with transcription, bot reply, thoughts, audio, and metrics.
     """
     try:
         audio_bytes = await file.read()
@@ -646,12 +729,14 @@ async def interact_voice(
             play_audio=play_audio,
             session_id=session_id,
             tts_device=tts_device,
+            think_mode=think_mode,
         )
         b64_audio = base64.b64encode(res.audio_bytes).decode("utf-8")
 
         return InteractResponse(
             user_text=res.user_text,
             assistant_text=res.assistant_text,
+            assistant_thought=res.assistant_thought,
             audio_base64=b64_audio,
             sample_rate=res.sample_rate,
             metrics=_metrics_dict(res.metrics),
