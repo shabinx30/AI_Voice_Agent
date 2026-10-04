@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useRef, useEffect } from "react";
-import { Mic, Square, Send, Volume2, Bot, Brain } from "lucide-react";
+import { Mic, Square, Send, Volume2, Bot, Brain, Play, Pause } from "lucide-react";
 
 interface DockProps {
   isRecording: boolean;
@@ -17,6 +17,9 @@ interface DockProps {
   isProcessing: boolean;
   isStreaming?: boolean;
   isThinking?: boolean;
+  isAudioPlaying?: boolean;
+  isAudioPaused?: boolean;
+  onToggleAudioPlayPause?: () => void;
   onCancelGeneration?: () => void;
   thinkMode?: boolean;
   onToggleThinkMode?: () => void;
@@ -40,6 +43,9 @@ export function Dock({
   isProcessing,
   isStreaming = false,
   isThinking = false,
+  isAudioPlaying = false,
+  isAudioPaused = false,
+  onToggleAudioPlayPause,
   onCancelGeneration,
   thinkMode,
   onToggleThinkMode,
@@ -315,6 +321,8 @@ export function Dock({
             placeholder={
               isRecording
                 ? "Listening to voice input..."
+                : isAudioPaused
+                ? "Audio playback paused • Click Resume or press Space"
                 : isGenerating
                 ? isThinking
                   ? "Reasoning in progress... Press Stop or Esc to cancel"
@@ -360,17 +368,81 @@ export function Dock({
                 <span>Speak</span>
               </button>
             ) : isGenerating ? (
-              <button
-                type="button"
-                id="dock-cancel-generation-btn"
-                onClick={onCancelGeneration}
-                title="Cancel text generation (Esc)"
-                aria-label="Cancel text generation"
-                className="h-9 px-3.5 rounded-full bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm animate-in fade-in"
-              >
-                <Square className="w-3.5 h-3.5 fill-current" />
-                <span>Stop</span>
-              </button>
+              <div className="flex items-center gap-1.5">
+                {onToggleAudioPlayPause && (isAudioPlaying || isAudioPaused) && (
+                  <button
+                    type="button"
+                    id="dock-toggle-audio-btn"
+                    onClick={onToggleAudioPlayPause}
+                    title={isAudioPaused ? "Resume audio playback (Space)" : "Pause audio playback (Space)"}
+                    aria-label={isAudioPaused ? "Resume audio" : "Pause audio"}
+                    className={`h-9 px-3 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs ${
+                      isAudioPaused
+                        ? "bg-amber-100 hover:bg-amber-200 text-amber-950 border border-amber-300"
+                        : "bg-neutral-900 hover:bg-black text-white"
+                    }`}
+                  >
+                    {isAudioPaused ? (
+                      <>
+                        <Play className="w-3.5 h-3.5 fill-current" />
+                        <span>Resume</span>
+                      </>
+                    ) : (
+                      <>
+                        <Pause className="w-3.5 h-3.5 fill-current" />
+                        <span>Pause</span>
+                      </>
+                    )}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  id="dock-cancel-generation-btn"
+                  onClick={onCancelGeneration}
+                  title="Cancel text generation (Esc)"
+                  aria-label="Cancel text generation"
+                  className="h-9 px-3.5 rounded-full bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm animate-in fade-in"
+                >
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>Stop</span>
+                </button>
+              </div>
+            ) : (isAudioPlaying || isAudioPaused) && onToggleAudioPlayPause ? (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  id="dock-toggle-audio-btn"
+                  onClick={onToggleAudioPlayPause}
+                  title={isAudioPaused ? "Resume audio playback (Space)" : "Pause audio playback (Space)"}
+                  aria-label={isAudioPaused ? "Resume audio" : "Pause audio"}
+                  className={`h-9 px-3 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs ${
+                    isAudioPaused
+                      ? "bg-amber-100 hover:bg-amber-200 text-amber-950 border border-amber-300 animate-pulse"
+                      : "bg-neutral-900 hover:bg-black text-white"
+                  }`}
+                >
+                  {isAudioPaused ? (
+                    <>
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>Resume</span>
+                    </>
+                  ) : (
+                    <>
+                      <Pause className="w-3.5 h-3.5 fill-current" />
+                      <span>Pause</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={onSubmitText}
+                  disabled={!inputText.trim() || isGenerating || isRecording}
+                  title="Send Message to Assistant"
+                  className="w-9 h-9 rounded-full bg-black hover:bg-neutral-800 disabled:opacity-30 disabled:hover:bg-black flex items-center justify-center text-white transition-all cursor-pointer shadow-xs"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </div>
             ) : (
               <button
                 type="button"

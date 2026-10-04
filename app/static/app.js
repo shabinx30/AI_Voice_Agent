@@ -13,9 +13,128 @@ const stopIcon = document.getElementById('stop-icon');
 const textInput = document.getElementById('text-prompt-input');
 const sendBtn = document.getElementById('send-btn');
 const stopGenBtn = document.getElementById('stop-gen-btn');
+const pauseAudioBtn = document.getElementById('pause-audio-btn');
+const pauseAudioIcon = document.getElementById('pause-audio-icon');
 const ttsBtn = document.getElementById('tts-btn');
 let isGeneratingText = false;
 let textAbortController = null;
+
+function ensureInlineAudioControl(bubbleDiv) {
+  if (!bubbleDiv) return;
+  const bubble = bubbleDiv.querySelector('.msg-bubble');
+  if (!bubble || bubble.querySelector('.inline-audio-controls')) return;
+
+  const controls = document.createElement('div');
+  controls.className = 'inline-audio-controls';
+
+  const toggleBtn = document.createElement('button');
+  toggleBtn.className = 'inline-audio-toggle playing';
+  toggleBtn.type = 'button';
+  toggleBtn.innerHTML = `
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+      <rect x="6" y="4" width="4" height="16" rx="1"></rect>
+      <rect x="14" y="4" width="4" height="16" rx="1"></rect>
+    </svg>
+    <span>Pause Audio</span>
+  `;
+  toggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    handleToggleAudioPlayback();
+  });
+
+  const waveContainer = document.createElement('div');
+  waveContainer.className = 'inline-soundwave-bars';
+  waveContainer.style.display = 'inline-flex';
+  waveContainer.style.alignItems = 'center';
+  waveContainer.style.gap = '3px';
+  waveContainer.style.marginLeft = '4px';
+  waveContainer.innerHTML = `
+    <span class="static-soundwave-bar"></span>
+    <span class="static-soundwave-bar"></span>
+    <span class="static-soundwave-bar"></span>
+    <span class="static-soundwave-bar"></span>
+  `;
+
+  controls.appendChild(toggleBtn);
+  controls.appendChild(waveContainer);
+  bubble.appendChild(controls);
+}
+
+function updateAudioControlUI(state) {
+  if (!pauseAudioBtn) return;
+  const active = Boolean(state && (state.isPlaying || state.isPaused));
+  if (active) {
+    pauseAudioBtn.classList.remove('hidden');
+    if (state.isPaused) {
+      pauseAudioBtn.style.background = '#d97706';
+      pauseAudioBtn.title = 'Resume audio playback (Space)';
+      if (pauseAudioIcon) {
+        pauseAudioIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"></polygon>';
+      }
+    } else {
+      pauseAudioBtn.style.background = '#171717';
+      pauseAudioBtn.title = 'Pause audio playback (Space)';
+      if (pauseAudioIcon) {
+        pauseAudioIcon.innerHTML = '<rect x="6" y="4" width="4" height="16" rx="1"></rect><rect x="14" y="4" width="4" height="16" rx="1"></rect>';
+      }
+    }
+  } else {
+    pauseAudioBtn.classList.add('hidden');
+  }
+
+  if (activeAssistantBubble) {
+    const inlineToggle = activeAssistantBubble.querySelector('.inline-audio-toggle');
+    const waveBars = activeAssistantBubble.querySelectorAll('.static-soundwave-bar');
+    if (inlineToggle) {
+      if (state && state.isPaused) {
+        inlineToggle.className = 'inline-audio-toggle paused';
+        inlineToggle.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg><span>Resume Audio</span>';
+        waveBars.forEach((bar) => {
+          bar.style.animationPlayState = 'paused';
+          bar.style.opacity = '0.4';
+        });
+      } else {
+        inlineToggle.className = 'inline-audio-toggle playing';
+        inlineToggle.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"></rect><rect x="14" y="4" width="4" height="16" rx="1"></rect></svg><span>Pause Audio</span>';
+        waveBars.forEach((bar) => {
+          bar.style.animationPlayState = 'running';
+          bar.style.opacity = '1';
+        });
+      }
+    }
+  }
+}
+
+async function handleToggleAudioPlayback() {
+  if (streamAudioQueue.isPlaying() || streamAudioQueue.isPaused()) {
+    if (streamAudioQueue.isPaused()) {
+      await streamAudioQueue.resume();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resume_audio' }));
+      }
+      systemStatusText.textContent = 'Audio resumed • Speaking...';
+    } else {
+      await streamAudioQueue.pause();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'pause_audio' }));
+      }
+      systemStatusText.textContent = 'Audio paused • Click Play to resume';
+    }
+    return;
+  }
+
+  if (audioPlayer && audioPlayer.src) {
+    if (audioPlayer.paused) {
+      audioPlayer.play().catch(() => {});
+      systemStatusText.textContent = 'Audio resumed';
+      updateAudioControlUI({ isPlaying: true, isPaused: false });
+    } else {
+      audioPlayer.pause();
+      systemStatusText.textContent = 'Audio paused';
+      updateAudioControlUI({ isPlaying: true, isPaused: true });
+    }
+  }
+}
 
 function setGeneratingState(generating) {
   isGeneratingText = generating;
@@ -49,6 +168,7 @@ function handleCancelGeneration() {
     audioPlayer.pause();
     audioPlayer.currentTime = 0;
   }
+  updateAudioControlUI({ isPlaying: false, isPaused: false });
 
   setGeneratingState(false);
   flushTokenBuffer(true);
@@ -127,6 +247,44 @@ class StreamAudioQueue {
     this.activeSources = [];
     this.htmlFallbackQueue = [];
     this.isHtmlPlaying = false;
+    this.currentHtmlAudio = null;
+
+    this._isPlaying = false;
+    this._isPaused = false;
+    this._isEndOfStream = false;
+    this.listeners = [];
+  }
+
+  isPaused() {
+    return this._isPaused;
+  }
+
+  isPlaying() {
+    return this._isPlaying;
+  }
+
+  getState() {
+    return {
+      isPlaying: this._isPlaying,
+      isPaused: this._isPaused,
+    };
+  }
+
+  onStateChange(cb) {
+    this.listeners.push(cb);
+    cb(this.getState());
+    return () => {
+      this.listeners = this.listeners.filter((item) => item !== cb);
+    };
+  }
+
+  notifyState() {
+    const state = this.getState();
+    for (const cb of this.listeners) {
+      try {
+        cb(state);
+      } catch (e) {}
+    }
   }
 
   getAudioContext() {
@@ -134,10 +292,74 @@ class StreamAudioQueue {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       this.audioCtx = new AudioContextClass();
     }
-    if (this.audioCtx.state === 'suspended') {
+    if (!this._isPaused && this.audioCtx.state === 'suspended') {
       this.audioCtx.resume().catch(() => {});
     }
     return this.audioCtx;
+  }
+
+  async pause() {
+    if (this._isPaused || !this._isPlaying) return;
+    this._isPaused = true;
+
+    try {
+      if (this.audioCtx && this.audioCtx.state === 'running') {
+        await this.audioCtx.suspend();
+      }
+    } catch (e) {}
+
+    if (this.currentHtmlAudio && !this.currentHtmlAudio.paused) {
+      try {
+        this.currentHtmlAudio.pause();
+      } catch (e) {}
+    }
+
+    this.notifyState();
+  }
+
+  async resume() {
+    if (!this._isPaused) return;
+    this._isPaused = false;
+
+    try {
+      if (this.audioCtx && this.audioCtx.state === 'suspended') {
+        await this.audioCtx.resume();
+      }
+    } catch (e) {}
+
+    if (this.currentHtmlAudio && this.currentHtmlAudio.paused) {
+      try {
+        this.currentHtmlAudio.play().catch(() => {});
+      } catch (e) {}
+    } else if (this.htmlFallbackQueue.length > 0 && !this.isHtmlPlaying) {
+      this.playNextHtmlAudio();
+    }
+
+    this.notifyState();
+  }
+
+  async togglePlayPause() {
+    if (this._isPaused) {
+      await this.resume();
+      return true;
+    } else if (this._isPlaying) {
+      await this.pause();
+      return false;
+    }
+    return false;
+  }
+
+  markEndOfStream() {
+    this._isEndOfStream = true;
+    if (
+      this.activeSources.length === 0 &&
+      this.htmlFallbackQueue.length === 0 &&
+      !this.isHtmlPlaying
+    ) {
+      this._isPlaying = false;
+      this._isPaused = false;
+      this.notifyState();
+    }
   }
 
   reset() {
@@ -151,15 +373,38 @@ class StreamAudioQueue {
     this.activeSources = [];
     this.htmlFallbackQueue = [];
     this.isHtmlPlaying = false;
+
+    if (this.currentHtmlAudio) {
+      try {
+        this.currentHtmlAudio.pause();
+        this.currentHtmlAudio.currentTime = 0;
+      } catch (e) {}
+      this.currentHtmlAudio = null;
+    }
+
+    if (this.audioCtx && this.audioCtx.state === 'suspended') {
+      this.audioCtx.resume().catch(() => {});
+    }
+
+    this._isPaused = false;
+    this._isPlaying = false;
+    this._isEndOfStream = false;
+    this.notifyState();
   }
 
   async enqueue(audioBase64, onStart = null, onEnded = null) {
     if (!audioBase64) return;
 
+    this._isPlaying = true;
+    this._isEndOfStream = false;
+    this.notifyState();
+
     try {
       const ctx = this.getAudioContext();
-      if (ctx.state === 'suspended') {
+      if (!this._isPaused && ctx.state === 'suspended') {
         await ctx.resume();
+      } else if (this._isPaused && ctx.state === 'running') {
+        await ctx.suspend();
       }
 
       // Decode base64 WAV into ArrayBuffer
@@ -187,6 +432,12 @@ class StreamAudioQueue {
         const idx = this.activeSources.indexOf(sourceNode);
         if (idx !== -1) this.activeSources.splice(idx, 1);
         if (onEnded) onEnded();
+
+        if (this.activeSources.length === 0 && this._isEndOfStream) {
+          this._isPlaying = false;
+          this._isPaused = false;
+          this.notifyState();
+        }
       };
 
       sourceNode.start(startTime);
@@ -204,27 +455,43 @@ class StreamAudioQueue {
   enqueueHtmlAudioFallback(audioBase64, onStart, onEnded) {
     const audioUrl = `data:audio/wav;base64,${audioBase64}`;
     this.htmlFallbackQueue.push({ audioUrl, onStart, onEnded });
-    if (!this.isHtmlPlaying) {
+    if (!this.isHtmlPlaying && !this._isPaused) {
       this.playNextHtmlAudio();
     }
   }
 
   playNextHtmlAudio() {
-    if (this.htmlFallbackQueue.length === 0) {
-      this.isHtmlPlaying = false;
+    if (this._isPaused || this.htmlFallbackQueue.length === 0) {
+      if (this.htmlFallbackQueue.length === 0) {
+        this.isHtmlPlaying = false;
+        this.currentHtmlAudio = null;
+        if (this._isEndOfStream && this.activeSources.length === 0) {
+          this._isPlaying = false;
+          this._isPaused = false;
+          this.notifyState();
+        }
+      }
       return;
     }
+
     this.isHtmlPlaying = true;
     const item = this.htmlFallbackQueue.shift();
     const audio = new Audio(item.audioUrl);
+    this.currentHtmlAudio = audio;
+
     if (item.onStart) item.onStart();
+
     audio.onended = () => {
+      this.currentHtmlAudio = null;
       if (item.onEnded) item.onEnded();
       this.playNextHtmlAudio();
     };
+
     audio.onerror = () => {
+      this.currentHtmlAudio = null;
       this.playNextHtmlAudio();
     };
+
     audio.play().catch(() => {
       this.playNextHtmlAudio();
     });
@@ -232,6 +499,25 @@ class StreamAudioQueue {
 }
 
 const streamAudioQueue = new StreamAudioQueue();
+streamAudioQueue.onStateChange((state) => {
+  updateAudioControlUI(state);
+});
+
+if (audioPlayer) {
+  audioPlayer.addEventListener('play', () => {
+    updateAudioControlUI({ isPlaying: true, isPaused: false });
+  });
+  audioPlayer.addEventListener('pause', () => {
+    if (audioPlayer.currentTime < audioPlayer.duration) {
+      updateAudioControlUI({ isPlaying: true, isPaused: true });
+    } else {
+      updateAudioControlUI({ isPlaying: false, isPaused: false });
+    }
+  });
+  audioPlayer.addEventListener('ended', () => {
+    updateAudioControlUI({ isPlaying: false, isPaused: false });
+  });
+}
 
 // ============================================================================
 // WebSocket Client for Real-time Streaming
@@ -427,6 +713,22 @@ function handleWebSocketMessage(msg) {
     return;
   }
 
+  if (msg.type === 'audio_paused') {
+    if (!streamAudioQueue.isPaused()) {
+      streamAudioQueue.pause();
+    }
+    updateAudioControlUI({ isPlaying: true, isPaused: true });
+    return;
+  }
+
+  if (msg.type === 'audio_resumed') {
+    if (streamAudioQueue.isPaused()) {
+      streamAudioQueue.resume();
+    }
+    updateAudioControlUI({ isPlaying: true, isPaused: false });
+    return;
+  }
+
   if (msg.type === 'transcription') {
     // STT completed: update user speech bubble immediately
     if (activeUserBubble) {
@@ -464,12 +766,14 @@ function handleWebSocketMessage(msg) {
 
     // Immediately play this sentence's audio and queue next
     if (!playHostAudio.checked && msg.audio_base64) {
+      ensureInlineAudioControl(activeAssistantBubble);
       streamAudioQueue.enqueue(msg.audio_base64);
     }
     return;
   }
 
   if (msg.type === 'cancelled' || msg.type === 'interrupted') {
+    streamAudioQueue.reset();
     setGeneratingState(false);
     flushTokenBuffer(true);
     if (activeAssistantBubble) {
@@ -489,6 +793,7 @@ function handleWebSocketMessage(msg) {
   if (msg.type === 'result') {
     // Full generation complete: flush remaining tokens, then reconcile
     // with the authoritative reply text
+    streamAudioQueue.markEndOfStream();
     setGeneratingState(false);
     flushTokenBuffer(true);
     if (activeAssistantBubble) {
@@ -1196,6 +1501,10 @@ function appendMessage(role, text) {
 
 function attachAudioButton(msgDiv, audioUrl, isTTS = false) {
   const bubble = msgDiv.querySelector('.msg-bubble');
+  const inlineControls = bubble.querySelector('.inline-audio-controls');
+  if (inlineControls) {
+    inlineControls.remove();
+  }
   if (bubble.querySelector('.audio-controls')) return;
 
   const controls = document.createElement('div');
@@ -1203,18 +1512,42 @@ function attachAudioButton(msgDiv, audioUrl, isTTS = false) {
 
   const playBtn = document.createElement('button');
   playBtn.className = 'play-bubble-btn';
-  playBtn.innerHTML = `
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-      <polygon points="5 3 19 12 5 21 5 3"></polygon>
-    </svg>
-    ${isTTS ? 'Play Audio' : 'Replay Full Audio'}
-  `;
+  const renderBtnContent = (isPlaying) => {
+    playBtn.innerHTML = isPlaying
+      ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"></rect><rect x="14" y="4" width="4" height="16" rx="1"></rect></svg> Pause Audio`
+      : `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg> ${isTTS ? 'Play Audio' : 'Replay Full Audio'}`;
+  };
+  renderBtnContent(false);
 
   playBtn.addEventListener('click', () => {
-    streamAudioQueue.reset();
-    audioPlayer.src = audioUrl;
-    audioPlayer.play();
+    if (audioPlayer.src === audioUrl) {
+      if (audioPlayer.paused) {
+        audioPlayer.play().catch(() => {});
+        renderBtnContent(true);
+      } else {
+        audioPlayer.pause();
+        renderBtnContent(false);
+      }
+    } else {
+      streamAudioQueue.reset();
+      audioPlayer.src = audioUrl;
+      audioPlayer.play().catch(() => {});
+      renderBtnContent(true);
+    }
   });
+
+  const onAudioPlay = () => {
+    if (audioPlayer.src === audioUrl) renderBtnContent(true);
+  };
+  const onAudioPause = () => {
+    if (audioPlayer.src === audioUrl) renderBtnContent(false);
+  };
+  const onAudioEnded = () => {
+    if (audioPlayer.src === audioUrl) renderBtnContent(false);
+  };
+  audioPlayer.addEventListener('play', onAudioPlay);
+  audioPlayer.addEventListener('pause', onAudioPause);
+  audioPlayer.addEventListener('ended', onAudioEnded);
 
   const downloadBtn = document.createElement('a');
   downloadBtn.className = 'download-bubble-btn';
@@ -1394,12 +1727,22 @@ micBtn.addEventListener('click', () => {
 
 sendBtn.addEventListener('click', handleTextSubmit);
 if (stopGenBtn) stopGenBtn.addEventListener('click', handleCancelGeneration);
+if (pauseAudioBtn) pauseAudioBtn.addEventListener('click', handleToggleAudioPlayback);
 if (ttsBtn) ttsBtn.addEventListener('click', handleDirectTTSSubmit);
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && isGeneratingText) {
     e.preventDefault();
     handleCancelGeneration();
+    return;
+  }
+  if (e.code === 'Space' && (streamAudioQueue.isPlaying() || streamAudioQueue.isPaused() || (audioPlayer && audioPlayer.src && !audioPlayer.paused))) {
+    const activeEl = document.activeElement;
+    const isEditing = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable);
+    if (!isEditing) {
+      e.preventDefault();
+      handleToggleAudioPlayback();
+    }
   }
 });
 

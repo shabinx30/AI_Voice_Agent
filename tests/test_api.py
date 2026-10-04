@@ -611,6 +611,34 @@ def test_chat_tokens_disconnect() -> None:
             # Exiting client.stream disconnects the client early
 
 
+def test_audio_pause_resume_endpoints() -> None:
+    """Verifies POST /api/audio/pause and /api/audio/resume endpoints."""
+    resp1 = client.post("/api/audio/pause", json={"session_id": "test_audio_sess"})
+    assert resp1.status_code == 200
+    assert resp1.json()["paused"] is True
+    assert resp1.json()["session_id"] == "test_audio_sess"
+
+    resp2 = client.post("/api/audio/resume", json={"session_id": "test_audio_sess"})
+    assert resp2.status_code == 200
+    assert resp2.json()["resumed"] is True
+    assert resp2.json()["session_id"] == "test_audio_sess"
+
+
+def test_websocket_pause_resume_audio() -> None:
+    """Verifies that sending pause_audio and resume_audio frames responds correctly."""
+    with client.websocket_connect("/ws/assistant") as ws:
+        ws.send_json({"type": "pause_audio"})
+        resp_pause = ws.receive_json()
+        assert resp_pause.get("type") == "audio_paused"
+        assert resp_pause.get("session_id", "").startswith("ws-")
+
+        ws.send_json({"type": "resume_audio"})
+        resp_resume = ws.receive_json()
+        assert resp_resume.get("type") == "audio_resumed"
+        assert resp_resume.get("session_id", "").startswith("ws-")
+
+
+
 
 
 

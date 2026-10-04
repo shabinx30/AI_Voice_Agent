@@ -158,3 +158,30 @@
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.3);
 }
+
+/* Animated sound wave bars for active audio playback */
+@keyframes soundwave {
+  0%, 100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.animate-soundwave-1 {
+  animation: soundwave 0.8s ease-in-out infinite;
+}
+
+.animate-soundwave-2 {
+  animation: soundwave 1.1s ease-in-out infinite 0.15s;
+}
+
+.animate-soundwave-3 {
+  animation: soundwave 0.9s ease-in-out infinite 0.3s;
+}
+
+.animate-soundwave-4 {
+  animation: soundwave 1.2s ease-in-out infinite 0.45s;
+}
+

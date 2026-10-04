@@ -86,6 +86,11 @@ export default function NexusVoiceApp() {
   const [recordingSeconds, setRecordingSeconds] = useState<number>(0);
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
 
+  // Audio playback state
+  const [isAudioPlaying, setIsAudioPlaying] = useState<boolean>(false);
+  const [isAudioPaused, setIsAudioPaused] = useState<boolean>(false);
+  const [activeReplayId, setActiveReplayId] = useState<string | null>(null);
+
   // Audio queue and refs
   const audioQueueRef = useRef<StreamAudioQueue | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
@@ -98,11 +103,50 @@ export default function NexusVoiceApp() {
   const micAudioCtxRef = useRef<AudioContext | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Initialize Audio Queue on client
+  // Initialize Audio Queue on client with playback state listener
   useEffect(() => {
-    audioQueueRef.current = new StreamAudioQueue();
+    const queue = new StreamAudioQueue();
+    audioQueueRef.current = queue;
+
+    const unsubscribe = queue.onStateChange((state) => {
+      setIsAudioPlaying(state.isPlaying);
+      setIsAudioPaused(state.isPaused);
+    });
+
     return () => {
-      audioQueueRef.current?.reset();
+      unsubscribe();
+      queue.reset();
+    };
+  }, []);
+
+  // Sync replay audio player element events
+  useEffect(() => {
+    const player = audioPlayerRef.current;
+    if (!player) return;
+
+    const onPlay = () => {
+      setIsAudioPlaying(true);
+      setIsAudioPaused(false);
+    };
+    const onPause = () => {
+      if (player.currentTime > 0 && !player.ended) {
+        setIsAudioPaused(true);
+      }
+    };
+    const onEnded = () => {
+      setIsAudioPlaying(false);
+      setIsAudioPaused(false);
+      setActiveReplayId(null);
+    };
+
+    player.addEventListener("play", onPlay);
+    player.addEventListener("pause", onPause);
+    player.addEventListener("ended", onEnded);
+
+    return () => {
+      player.removeEventListener("play", onPlay);
+      player.removeEventListener("pause", onPause);
+      player.removeEventListener("ended", onEnded);
     };
   }, []);
 
@@ -551,14 +595,30 @@ export default function NexusVoiceApp() {
       }
 
       if (msg.type === "chunk") {
-        setStatusText(`Speaking sentence ${(msg.index ?? 0) + 1}...`);
         if (!playHostAudio && msg.audio_base64 && audioQueueRef.current) {
           audioQueueRef.current.enqueue(msg.audio_base64);
+        }
+        if (!audioQueueRef.current?.isPaused()) {
+          setStatusText(`Speaking sentence ${(msg.index ?? 0) + 1}...`);
         }
         return;
       }
 
+      if (msg.type === "audio_paused") {
+        setIsAudioPaused(true);
+        setStatusText("Audio playback paused • Click Resume or press Space");
+        return;
+      }
+
+      if (msg.type === "audio_resumed") {
+        setIsAudioPaused(false);
+        setIsAudioPlaying(true);
+        setStatusText("Audio playback resumed • Speaking...");
+        return;
+      }
+
       if (msg.type === "result") {
+        audioQueueRef.current?.markEndOfStream();
         setIsStreaming(false);
         setIsThinking(false);
         setIsProcessing(false);
@@ -573,7 +633,9 @@ export default function NexusVoiceApp() {
           setMetrics(msg.metrics);
         }
 
-        setStatusText("All Pipelines Active • Ready for Voice Input");
+        if (!audioQueueRef.current?.isPlaying() && !audioQueueRef.current?.isPaused()) {
+          setStatusText("All Pipelines Active • Ready for Voice Input");
+        }
 
         setMessages((prev) => {
           const updated = [...prev];
@@ -986,6 +1048,9 @@ export default function NexusVoiceApp() {
       audioPlayerRef.current.pause();
       audioPlayerRef.current.currentTime = 0;
     }
+    setActiveReplayId(null);
+    setIsAudioPlaying(false);
+    setIsAudioPaused(false);
 
     // 5. Finalize message with current buffer content
     const partialText = streamingTokenBufferRef.current.trim();
@@ -1022,17 +1087,75 @@ export default function NexusVoiceApp() {
     setStatusText("Generation stopped by user");
   }, []);
 
-  // Global Escape key shortcut to cancel active generation
+  // Play / Pause Toggle for Generating Audio & Replay
+  const handleToggleAudioPlayPause = useCallback(async () => {
+    // 1. If StreamAudioQueue has active generating audio or is paused
+    if (
+      audioQueueRef.current &&
+      (audioQueueRef.current.isPlaying() || audioQueueRef.current.isPaused())
+    ) {
+      if (audioQueueRef.current.isPaused()) {
+        await audioQueueRef.current.resume();
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: "resume_audio" }));
+        }
+        setStatusText("Audio playback resumed • Speaking...");
+      } else {
+        await audioQueueRef.current.pause();
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: "pause_audio" }));
+        }
+        setStatusText("Audio playback paused • Click Resume or press Space");
+      }
+      return;
+    }
+
+    // 2. If single-file audio player (replay) is active
+    if (audioPlayerRef.current && audioPlayerRef.current.src) {
+      if (audioPlayerRef.current.paused) {
+        audioPlayerRef.current.play().catch(() => {});
+        setIsAudioPaused(false);
+        setIsAudioPlaying(true);
+        setStatusText("Audio playback resumed");
+      } else {
+        audioPlayerRef.current.pause();
+        setIsAudioPaused(true);
+        setStatusText("Audio playback paused • Click Resume or press Space");
+      }
+    }
+  }, []);
+
+  // Global Escape & Space shortcuts
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const isInput =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+
       if (e.key === "Escape" && (isProcessing || isStreaming)) {
         e.preventDefault();
         handleCancelGeneration();
+        return;
+      }
+
+      if (e.code === "Space" && !isInput && (isAudioPlaying || isAudioPaused)) {
+        e.preventDefault();
+        handleToggleAudioPlayPause();
       }
     };
     window.addEventListener("keydown", handleGlobalKeyDown);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [isProcessing, isStreaming, handleCancelGeneration]);
+  }, [
+    isProcessing,
+    isStreaming,
+    isAudioPlaying,
+    isAudioPaused,
+    handleCancelGeneration,
+    handleToggleAudioPlayPause,
+  ]);
 
   // Text Submission Handler
   const handleTextSubmit = async () => {
@@ -1354,14 +1477,34 @@ export default function NexusVoiceApp() {
     }
   };
 
-  // Replay Full Audio
-  const handleReplayAudio = (audioBase64: string) => {
-    audioQueueRef.current?.reset();
-    if (audioPlayerRef.current) {
-      audioPlayerRef.current.src = `data:audio/wav;base64,${audioBase64}`;
-      audioPlayerRef.current.play().catch(() => {});
-    }
-  };
+  // Replay Full Audio with Play / Pause Toggle
+  const handleReplayAudio = useCallback(
+    (audioBase64: string, messageId?: string) => {
+      const player = audioPlayerRef.current;
+      if (!player) return;
+
+      if (messageId && activeReplayId === messageId) {
+        if (!player.paused) {
+          player.pause();
+          setIsAudioPaused(true);
+          setStatusText("Audio playback paused");
+          return;
+        } else if (player.paused && player.currentTime > 0 && !player.ended) {
+          player.play().catch(() => {});
+          setIsAudioPaused(false);
+          setIsAudioPlaying(true);
+          setStatusText("Audio playback resumed");
+          return;
+        }
+      }
+
+      audioQueueRef.current?.reset();
+      setActiveReplayId(messageId || null);
+      player.src = `data:audio/wav;base64,${audioBase64}`;
+      player.play().catch(() => {});
+    },
+    [activeReplayId]
+  );
 
   return (
     <div className="relative w-screen h-screen max-h-screen overflow-hidden p-3 md:p-4.5 flex gap-4 bg-white">
@@ -1403,7 +1546,11 @@ export default function NexusVoiceApp() {
           streamingThoughtBuffer={streamingThoughtBuffer}
           isStreaming={isStreaming}
           isThinking={isThinking}
+          isAudioPlaying={isAudioPlaying}
+          isAudioPaused={isAudioPaused}
+          onToggleAudioPlayPause={handleToggleAudioPlayPause}
           onReplayAudio={handleReplayAudio}
+          activeReplayId={activeReplayId}
           onCancelGeneration={handleCancelGeneration}
         />
 
@@ -1422,6 +1569,9 @@ export default function NexusVoiceApp() {
           isProcessing={isProcessing}
           isStreaming={isStreaming}
           isThinking={isThinking}
+          isAudioPlaying={isAudioPlaying}
+          isAudioPaused={isAudioPaused}
+          onToggleAudioPlayPause={handleToggleAudioPlayPause}
           onCancelGeneration={handleCancelGeneration}
           thinkMode={thinkMode}
           onToggleThinkMode={() => handleToggleThinkMode()}

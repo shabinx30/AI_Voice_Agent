@@ -931,6 +931,42 @@ async def interrupt_session(request: InterruptRequest) -> Dict[str, Any]:
         ) from exc
 
 
+@router.post("/audio/pause")
+async def pause_audio_endpoint(request: InterruptRequest) -> Dict[str, Any]:
+    """Pauses host audio playback for the specified session."""
+    try:
+        paused = pipeline.pause_audio(request.session_id)
+        return {
+            "paused": True,
+            "session_id": request.session_id,
+            "active_player": paused,
+        }
+    except Exception as exc:
+        logger.error("API pause audio error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Pause audio failed: {exc}",
+        ) from exc
+
+
+@router.post("/audio/resume")
+async def resume_audio_endpoint(request: InterruptRequest) -> Dict[str, Any]:
+    """Resumes host audio playback for the specified session."""
+    try:
+        resumed = pipeline.resume_audio(request.session_id)
+        return {
+            "resumed": True,
+            "session_id": request.session_id,
+            "active_player": resumed,
+        }
+    except Exception as exc:
+        logger.error("API resume audio error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Resume audio failed: {exc}",
+        ) from exc
+
+
 @router.get("/diagnostics")
 async def get_diagnostics() -> Dict[str, Any]:
     """Returns runtime-confirmed OpenVINO/Kokoro device diagnostics.

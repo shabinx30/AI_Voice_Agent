@@ -136,6 +136,28 @@ async def websocket_assistant_endpoint(websocket: WebSocket) -> None:
                 )
                 continue
 
+            if msg_type in ("pause_audio", "pause"):
+                paused = ws_pipeline.pause_audio(session_id)
+                await safe_send_json(
+                    {
+                        "type": "audio_paused",
+                        "session_id": session_id,
+                        "active_player": paused,
+                    }
+                )
+                continue
+
+            if msg_type in ("resume_audio", "resume", "play_audio"):
+                resumed = ws_pipeline.resume_audio(session_id)
+                await safe_send_json(
+                    {
+                        "type": "audio_resumed",
+                        "session_id": session_id,
+                        "active_player": resumed,
+                    }
+                )
+                continue
+
             if msg_type == "get_models":
                 try:
                     available = await ws_pipeline.get_available_models()

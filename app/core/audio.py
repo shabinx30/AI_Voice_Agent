@@ -40,6 +40,8 @@ class StreamAudioPlayer:
         self._queue: queue.Queue = queue.Queue(maxsize=max(1, max_queue))
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._pause_event.set()
         self._is_running: bool = False
         self._lock = threading.Lock()
         self._on_first_play = on_first_play
@@ -52,14 +54,36 @@ class StreamAudioPlayer:
             return
         self._is_running = True
         self._stop_event.clear()
+        self._pause_event.set()
         self._thread = threading.Thread(
             target=self._playback_worker, daemon=True, name="StreamAudioPlayer"
         )
         self._thread.start()
 
+    def pause(self) -> None:
+        """Pauses audio playback."""
+        self._pause_event.clear()
+        try:
+            sd.stop()
+        except Exception:
+            pass
+
+    def resume(self) -> None:
+        """Resumes audio playback."""
+        self._pause_event.set()
+
+    @property
+    def is_paused(self) -> bool:
+        """Returns True if audio playback is currently paused."""
+        return not self._pause_event.is_set()
+
     def _playback_worker(self) -> None:
         """Worker loop executing sequential chunk playback."""
         while not self._stop_event.is_set():
+            if not self._pause_event.is_set():
+                import time
+                time.sleep(0.05)
+                continue
             try:
                 item = self._queue.get(timeout=0.1)
             except queue.Empty:
@@ -156,6 +180,7 @@ class StreamAudioPlayer:
     def stop(self) -> None:
         """Immediately aborts audio playback and drains pending chunks."""
         self._stop_event.set()
+        self._pause_event.set()
         try:
             sd.stop()
         except Exception:

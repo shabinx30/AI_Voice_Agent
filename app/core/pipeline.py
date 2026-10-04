@@ -534,6 +534,37 @@ class AssistantPipeline:
             except Exception:
                 pass
 
+    def pause_audio(self, session_id: str = "default") -> bool:
+        """Pauses active audio playback for the session.
+
+        Returns:
+            True if an active player was paused, False otherwise.
+        """
+        player = self._players.get(session_id)
+        if player is not None and hasattr(player, "pause"):
+            player.pause()
+            return True
+        return False
+
+    def resume_audio(self, session_id: str = "default") -> bool:
+        """Resumes active audio playback for the session.
+
+        Returns:
+            True if an active player was resumed, False otherwise.
+        """
+        player = self._players.get(session_id)
+        if player is not None and hasattr(player, "resume"):
+            player.resume()
+            return True
+        return False
+
+    def is_audio_paused(self, session_id: str = "default") -> bool:
+        """Returns True if audio playback is currently paused."""
+        player = self._players.get(session_id)
+        if player is not None and hasattr(player, "is_paused"):
+            return player.is_paused
+        return False
+
     async def _execute_streaming_pipeline(
         self,
         prompt: str,

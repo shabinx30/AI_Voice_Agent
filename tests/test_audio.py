@@ -55,3 +55,20 @@ def test_stream_audio_player_queue() -> None:
     player.stop()
     assert not player.is_playing
 
+
+def test_stream_audio_player_pause_resume() -> None:
+    """Tests StreamAudioPlayer pause, resume, and is_paused states."""
+    from app.core.audio import StreamAudioPlayer
+
+    player = StreamAudioPlayer()
+    assert not player.is_paused
+
+    player.pause()
+    assert player.is_paused
+
+    player.resume()
+    assert not player.is_paused
+
+    player.stop()
+
+

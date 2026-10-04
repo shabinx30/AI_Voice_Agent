@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { Bot, User, Play, Volume2, Download, Brain, ChevronDown, ChevronRight, Square } from "lucide-react";
+import { Bot, User, Play, Pause, Volume2, Download, Brain, ChevronDown, ChevronRight, Square } from "lucide-react";
 import { ChatMessage } from "@/lib/types";
 import { MarkdownContent } from "@/components/MarkdownContent";
 
@@ -11,7 +11,11 @@ interface ChatAreaProps {
   streamingThoughtBuffer?: string;
   isStreaming: boolean;
   isThinking?: boolean;
-  onReplayAudio: (audioBase64: string) => void;
+  isAudioPlaying?: boolean;
+  isAudioPaused?: boolean;
+  onToggleAudioPlayPause?: () => void;
+  onReplayAudio: (audioBase64: string, messageId?: string) => void;
+  activeReplayId?: string | null;
   onCancelGeneration?: () => void;
 }
 
@@ -79,7 +83,11 @@ export function ChatArea({
   streamingThoughtBuffer = "",
   isStreaming,
   isThinking = false,
+  isAudioPlaying = false,
+  isAudioPaused = false,
+  onToggleAudioPlayPause,
   onReplayAudio,
+  activeReplayId,
   onCancelGeneration,
 }: ChatAreaProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -240,35 +248,113 @@ export function ChatArea({
                 )}
               </div>
 
-              {/* Inline Stop Generation Button for Active Streaming Message */}
-              {isLastAssistant && isStreaming && onCancelGeneration && (
-                <div className="mt-3 pt-2.5 border-t border-neutral-100 flex items-center justify-between">
-                  <button
-                    type="button"
-                    id="chat-cancel-generation-btn"
-                    onClick={onCancelGeneration}
-                    title="Stop generation (Esc)"
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-100 hover:bg-red-50 hover:text-red-700 hover:border-red-200 border border-neutral-200 text-neutral-600 text-xs font-medium transition-all cursor-pointer shadow-2xs group"
-                  >
-                    <Square className="w-3 h-3 fill-current text-neutral-400 group-hover:text-red-600 transition-colors" />
-                    <span>Stop generation</span>
-                  </button>
-                  <span className="text-[10px] text-neutral-400 font-mono">
-                    Esc
-                  </span>
+              {/* Generating / Active Audio Playback Controls */}
+              {isLastAssistant && (isStreaming || isAudioPlaying || isAudioPaused) && (
+                <div className="mt-3 pt-2.5 border-t border-neutral-100 flex flex-wrap items-center justify-between gap-2 animate-in fade-in duration-200">
+                  <div className="flex items-center gap-2">
+                    {onToggleAudioPlayPause && (isAudioPlaying || isAudioPaused) && (
+                      <button
+                        type="button"
+                        id="chat-toggle-audio-btn"
+                        onClick={onToggleAudioPlayPause}
+                        title={isAudioPaused ? "Resume audio playback (Space)" : "Pause audio playback (Space)"}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer shadow-2xs ${
+                          isAudioPaused
+                            ? "bg-amber-100 hover:bg-amber-200 text-amber-950 border border-amber-300"
+                            : "bg-black hover:bg-neutral-800 text-white border border-black"
+                        }`}
+                      >
+                        {isAudioPaused ? (
+                          <>
+                            <Play className="w-3.5 h-3.5 fill-current" />
+                            <span>Resume Audio</span>
+                          </>
+                        ) : (
+                          <>
+                            <Pause className="w-3.5 h-3.5 fill-current" />
+                            <span>Pause Audio</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+
+                    {/* Animated sound wave bars or paused badge */}
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-neutral-100 border border-neutral-200 text-[11px] font-mono select-none">
+                      {isAudioPaused ? (
+                        <span className="text-amber-800 flex items-center gap-1.5 font-semibold">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                          Audio Paused
+                        </span>
+                      ) : isAudioPlaying ? (
+                        <div className="flex items-center gap-1.5 text-neutral-800 font-medium">
+                          <div className="flex items-center gap-0.5 h-3">
+                            <span className="w-0.5 h-3 bg-black rounded-full animate-soundwave-1 inline-block" />
+                            <span className="w-0.5 h-3 bg-black rounded-full animate-soundwave-2 inline-block" />
+                            <span className="w-0.5 h-3 bg-black rounded-full animate-soundwave-3 inline-block" />
+                            <span className="w-0.5 h-3 bg-black rounded-full animate-soundwave-4 inline-block" />
+                          </div>
+                          <span>Speaking speech...</span>
+                        </div>
+                      ) : (
+                        <span className="text-neutral-500 flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 animate-ping inline-block" />
+                          Generating speech...
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Stop Generation Button if LLM is still streaming */}
+                  {isStreaming && onCancelGeneration && (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        id="chat-cancel-generation-btn"
+                        onClick={onCancelGeneration}
+                        title="Stop generation (Esc)"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-neutral-100 hover:bg-red-50 hover:text-red-700 hover:border-red-200 border border-neutral-200 text-neutral-600 text-xs font-medium transition-all cursor-pointer shadow-2xs group"
+                      >
+                        <Square className="w-3 h-3 fill-current text-neutral-400 group-hover:text-red-600 transition-colors" />
+                        <span>Stop</span>
+                      </button>
+                      <span className="text-[10px] text-neutral-400 font-mono hidden sm:inline">
+                        Esc
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
 
               {/* Audio Controls for Completed Speech Output */}
-              {!isUser && msg.audioBase64 && !isLastAssistant && (
+              {!isUser && msg.audioBase64 && (!isLastAssistant || (!isStreaming && !isAudioPlaying && !isAudioPaused)) && (
                 <div className="mt-3 pt-2.5 border-t border-neutral-200 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => onReplayAudio(msg.audioBase64!)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 border border-neutral-300 text-black text-xs font-medium transition-colors cursor-pointer"
+                      onClick={() => onReplayAudio(msg.audioBase64!, msg.id)}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer ${
+                        activeReplayId === msg.id && isAudioPaused
+                          ? "bg-amber-100 hover:bg-amber-200 border-amber-300 text-amber-950 font-semibold"
+                          : activeReplayId === msg.id && isAudioPlaying
+                          ? "bg-black hover:bg-neutral-800 border-black text-white font-semibold"
+                          : "bg-neutral-100 hover:bg-neutral-200 border-neutral-300 text-black"
+                      }`}
                     >
-                      <Play className="w-3.5 h-3.5 fill-current text-black" />
-                      <span>Play Audio</span>
+                      {activeReplayId === msg.id && isAudioPlaying && !isAudioPaused ? (
+                        <>
+                          <Pause className="w-3.5 h-3.5 fill-current" />
+                          <span>Pause Audio</span>
+                        </>
+                      ) : activeReplayId === msg.id && isAudioPaused ? (
+                        <>
+                          <Play className="w-3.5 h-3.5 fill-current" />
+                          <span>Resume Audio</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3.5 h-3.5 fill-current" />
+                          <span>Play Audio</span>
+                        </>
+                      )}
                     </button>
 
                     <button
