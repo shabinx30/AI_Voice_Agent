@@ -96,6 +96,7 @@ export default function NexusVoiceApp() {
   const recordedChunksRef = useRef<Blob[]>([]);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const micAudioCtxRef = useRef<AudioContext | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Initialize Audio Queue on client
   useEffect(() => {
@@ -396,6 +397,42 @@ export default function NexusVoiceApp() {
   const handleWebSocketMessage = useCallback(
     (msg: WSInboundMessage) => {
       if (msg.type === "pong") return;
+
+      if (msg.type === "cancelled" || msg.type === "interrupted") {
+        setIsStreaming(false);
+        setIsThinking(false);
+        setIsProcessing(false);
+        const streamedText = streamingTokenBufferRef.current.trim();
+        const streamedThought = streamingThoughtBufferRef.current.trim();
+        streamingTokenBufferRef.current = "";
+        streamingThoughtBufferRef.current = "";
+        setStreamingTokenBuffer("");
+        setStreamingThoughtBuffer("");
+
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastAssistantIdx = updated.findLastIndex(
+            (m) => m.role === "assistant"
+          );
+          if (lastAssistantIdx !== -1) {
+            const currentText = updated[lastAssistantIdx].text || "";
+            const finalText =
+              streamedText || currentText || "(Generation stopped by user)";
+            updated[lastAssistantIdx] = {
+              ...updated[lastAssistantIdx],
+              text: finalText,
+              thought: streamedThought || updated[lastAssistantIdx].thought,
+              isStreaming: false,
+              isThinking: false,
+              isCancelled: true,
+            };
+          }
+          return updated;
+        });
+
+        setStatusText(msg.message || "Generation stopped by user");
+        return;
+      }
 
       if (msg.type === "status") {
         setStatusText(msg.message);
@@ -918,6 +955,85 @@ export default function NexusVoiceApp() {
     }
   };
 
+  // Cancel Text Generation Handler
+  const handleCancelGeneration = useCallback(async () => {
+    // 1. Abort any active HTTP fallback stream
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
+    // 2. Transmit cancel signal via WebSocket if open
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "cancel" }));
+    }
+
+    // 3. Trigger HTTP interrupt fallback to guarantee LM Studio / pipeline stops
+    try {
+      const baseUrl = getApiBaseUrl();
+      fetch(`${baseUrl}/api/interrupt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: "default" }),
+      }).catch(() => {});
+    } catch {
+      // Ignore background network failure
+    }
+
+    // 4. Halt client audio queues and playback
+    audioQueueRef.current?.reset();
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      audioPlayerRef.current.currentTime = 0;
+    }
+
+    // 5. Finalize message with current buffer content
+    const partialText = streamingTokenBufferRef.current.trim();
+    const partialThought = streamingThoughtBufferRef.current.trim();
+    streamingTokenBufferRef.current = "";
+    streamingThoughtBufferRef.current = "";
+    setStreamingTokenBuffer("");
+    setStreamingThoughtBuffer("");
+    setIsStreaming(false);
+    setIsThinking(false);
+    setIsProcessing(false);
+
+    setMessages((prev) => {
+      const updated = [...prev];
+      const lastAssistantIdx = updated.findLastIndex(
+        (m) => m.role === "assistant"
+      );
+      if (lastAssistantIdx !== -1) {
+        const currentText = updated[lastAssistantIdx].text || "";
+        const finalText =
+          partialText || currentText || "(Generation stopped by user)";
+        updated[lastAssistantIdx] = {
+          ...updated[lastAssistantIdx],
+          text: finalText,
+          thought: partialThought || updated[lastAssistantIdx].thought,
+          isStreaming: false,
+          isThinking: false,
+          isCancelled: true,
+        };
+      }
+      return updated;
+    });
+
+    setStatusText("Generation stopped by user");
+  }, []);
+
+  // Global Escape key shortcut to cancel active generation
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && (isProcessing || isStreaming)) {
+        e.preventDefault();
+        handleCancelGeneration();
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, [isProcessing, isStreaming, handleCancelGeneration]);
+
   // Text Submission Handler
   const handleTextSubmit = async () => {
     const trimmed = inputText.trim();
@@ -925,6 +1041,7 @@ export default function NexusVoiceApp() {
 
     setInputText("");
     setIsProcessing(true);
+    setIsStreaming(true);
     setStatusText("Streaming reply and synthesizing speech...");
     streamingTokenBufferRef.current = "";
     streamingThoughtBufferRef.current = "";
@@ -1095,11 +1212,15 @@ export default function NexusVoiceApp() {
     promptText: string,
     assistantMsgId: string
   ) => {
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const baseUrl = getApiBaseUrl();
       const res = await fetch(`${baseUrl}/api/chat/tokens`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           message: promptText,
           model: selectedModel,
@@ -1154,6 +1275,8 @@ export default function NexusVoiceApp() {
         }
       }
 
+      if (controller.signal.aborted) return;
+
       setStreamingTokenBuffer("");
       setStreamingThoughtBuffer("");
       setIsThinking(false);
@@ -1175,6 +1298,7 @@ export default function NexusVoiceApp() {
       const ttsRes = await fetch(`${baseUrl}/api/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           text: fullText,
           speaker: selectedSpeaker,
@@ -1206,18 +1330,27 @@ export default function NexusVoiceApp() {
 
       setStatusText("All Pipelines Active • Ready for Voice Input");
     } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
+        return;
+      }
       const errMsg = err instanceof Error ? err.message : "Error processing text";
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === assistantMsgId
-            ? { ...msg, text: `Error: ${errMsg}`, isStreaming: false }
+            ? { ...msg, text: `Error: ${errMsg}`, isStreaming: false, isThinking: false }
             : msg
         )
       );
       setStatusText("Error processing text.");
     } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
       setIsProcessing(false);
+      setIsStreaming(false);
+      setIsThinking(false);
       setStreamingTokenBuffer("");
+      setStreamingThoughtBuffer("");
     }
   };
 
@@ -1271,6 +1404,7 @@ export default function NexusVoiceApp() {
           isStreaming={isStreaming}
           isThinking={isThinking}
           onReplayAudio={handleReplayAudio}
+          onCancelGeneration={handleCancelGeneration}
         />
 
         {/* Visualizer & Interaction Dock Component */}
@@ -1286,6 +1420,9 @@ export default function NexusVoiceApp() {
           interactionMode={interactionMode}
           onToggleInteractionMode={setInteractionMode}
           isProcessing={isProcessing}
+          isStreaming={isStreaming}
+          isThinking={isThinking}
+          onCancelGeneration={handleCancelGeneration}
           thinkMode={thinkMode}
           onToggleThinkMode={() => handleToggleThinkMode()}
           supportsThinking={supportsThinking}

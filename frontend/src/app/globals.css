@@ -84,18 +84,38 @@
   100% { transform: scale(0.95); opacity: 0.8; }
 }
 
-/* Live token stream caret */
+/* Live token stream caret & markdown formatting */
 .stream-caret {
-  display: inline;
-  border-right: 2px solid #000000;
-  padding-right: 1px;
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  background-color: #000000;
+  vertical-align: -0.15em;
+  margin-left: 3px;
   animation: caretBlink 0.85s steps(2, start) infinite;
 }
 
 @keyframes caretBlink {
   50% {
-    border-right-color: transparent;
+    opacity: 0;
   }
+}
+
+.markdown-body {
+  word-break: break-word;
+}
+
+.markdown-body li > p {
+  display: inline;
+}
+
+.markdown-body li > p:not(:first-child) {
+  display: block;
+  margin-top: 0.35rem;
+}
+
+.markdown-streaming > p:last-child {
+  display: inline;
 }
 
 .streamed-word {

@@ -964,7 +964,13 @@ class AssistantPipeline:
                     break
                 yield chunk
         finally:
-            await task
+            if not task.done():
+                self.cancel(session_id)
+                task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
 
     def clear_history(self, session_id: Optional[str] = None) -> None:
         """Clears conversational history context.

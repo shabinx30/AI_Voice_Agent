@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { Bot, User, Play, Volume2, Download, Brain, ChevronDown, ChevronRight } from "lucide-react";
+import { Bot, User, Play, Volume2, Download, Brain, ChevronDown, ChevronRight, Square } from "lucide-react";
 import { ChatMessage } from "@/lib/types";
+import { MarkdownContent } from "@/components/MarkdownContent";
 
 interface ChatAreaProps {
   messages: ChatMessage[];
@@ -11,6 +12,7 @@ interface ChatAreaProps {
   isStreaming: boolean;
   isThinking?: boolean;
   onReplayAudio: (audioBase64: string) => void;
+  onCancelGeneration?: () => void;
 }
 
 function ThinkingAccordion({
@@ -78,6 +80,7 @@ export function ChatArea({
   isStreaming,
   isThinking = false,
   onReplayAudio,
+  onCancelGeneration,
 }: ChatAreaProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -182,6 +185,11 @@ export function ChatArea({
                       thought
                     </span>
                   )}
+                  {msg.isCancelled && !isUser && (
+                    <span className="px-1.5 py-0.2 rounded text-[10px] bg-red-50 text-red-600 border border-red-200 font-mono">
+                      stopped
+                    </span>
+                  )}
                 </div>
                 {msg.speaker && !isUser && (
                   <span className="text-[10px] text-neutral-400 font-mono">
@@ -199,15 +207,23 @@ export function ChatArea({
                 />
               )}
 
-              <div className="text-sm leading-relaxed whitespace-pre-wrap wrap-break-word text-black">
+              <div className="text-sm leading-relaxed wrap-break-word text-black">
                 {msg.text ? (
-                  msg.text
+                  isUser ? (
+                    <div className="whitespace-pre-wrap">{msg.text}</div>
+                  ) : (
+                    <MarkdownContent content={msg.text} />
+                  )
+                ) : msg.isCancelled ? (
+                  <span className="text-neutral-500 italic text-xs">
+                    (Generation stopped by user)
+                  </span>
                 ) : isLastAssistant ? (
                   streamingTokenBuffer ? (
-                    <span>
-                      {streamingTokenBuffer}
-                      <span className="stream-caret" />
-                    </span>
+                    <MarkdownContent
+                      content={streamingTokenBuffer}
+                      isStreaming={true}
+                    />
                   ) : isMessageCurrentlyThinking ? (
                     <span className="text-violet-600/80 italic text-xs flex items-center gap-1.5 font-medium">
                       <Brain className="w-3.5 h-3.5 text-violet-500 animate-pulse" />
@@ -223,6 +239,25 @@ export function ChatArea({
                   <span className="text-neutral-500 italic">...</span>
                 )}
               </div>
+
+              {/* Inline Stop Generation Button for Active Streaming Message */}
+              {isLastAssistant && isStreaming && onCancelGeneration && (
+                <div className="mt-3 pt-2.5 border-t border-neutral-100 flex items-center justify-between">
+                  <button
+                    type="button"
+                    id="chat-cancel-generation-btn"
+                    onClick={onCancelGeneration}
+                    title="Stop generation (Esc)"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-100 hover:bg-red-50 hover:text-red-700 hover:border-red-200 border border-neutral-200 text-neutral-600 text-xs font-medium transition-all cursor-pointer shadow-2xs group"
+                  >
+                    <Square className="w-3 h-3 fill-current text-neutral-400 group-hover:text-red-600 transition-colors" />
+                    <span>Stop generation</span>
+                  </button>
+                  <span className="text-[10px] text-neutral-400 font-mono">
+                    Esc
+                  </span>
+                </div>
+              )}
 
               {/* Audio Controls for Completed Speech Output */}
               {!isUser && msg.audioBase64 && !isLastAssistant && (

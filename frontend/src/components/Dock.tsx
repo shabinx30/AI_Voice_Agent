@@ -15,6 +15,9 @@ interface DockProps {
   interactionMode: "assistant" | "tts";
   onToggleInteractionMode: (mode: "assistant" | "tts") => void;
   isProcessing: boolean;
+  isStreaming?: boolean;
+  isThinking?: boolean;
+  onCancelGeneration?: () => void;
   thinkMode?: boolean;
   onToggleThinkMode?: () => void;
   supportsThinking?: boolean;
@@ -35,6 +38,9 @@ export function Dock({
   interactionMode,
   onToggleInteractionMode,
   isProcessing,
+  isStreaming = false,
+  isThinking = false,
+  onCancelGeneration,
   thinkMode,
   onToggleThinkMode,
   supportsThinking,
@@ -122,9 +128,17 @@ export function Dock({
     };
   }, [isRecording, analyserNode]);
 
+  const isGenerating = Boolean(isProcessing || isStreaming);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape" && isGenerating) {
+      e.preventDefault();
+      onCancelGeneration?.();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (isGenerating) return;
       if (interactionMode === "tts") {
         onSubmitDirectTTS();
       } else {
@@ -301,6 +315,10 @@ export function Dock({
             placeholder={
               isRecording
                 ? "Listening to voice input..."
+                : isGenerating
+                ? isThinking
+                  ? "Reasoning in progress... Press Stop or Esc to cancel"
+                  : "Generating response... Press Stop or Esc to cancel"
                 : interactionMode === "tts"
                 ? "Type text to synthesize and speak directly with Kokoro TTS..."
                 : supportsThinking && thinkMode
@@ -316,12 +334,12 @@ export function Dock({
           />
 
           <div className="absolute right-1.5 flex items-center gap-1">
-            {/* Quick Direct TTS Button (available in assistant mode too) */}
-            {interactionMode === "assistant" && (
+            {/* Quick Direct TTS Button (available in assistant mode too when not generating) */}
+            {interactionMode === "assistant" && !isGenerating && (
               <button
                 type="button"
                 onClick={onSubmitDirectTTS}
-                disabled={!inputText.trim() || isProcessing || isRecording}
+                disabled={!inputText.trim() || isGenerating || isRecording}
                 title="Synthesize and speak directly with TTS (bypasses LLM)"
                 className="w-9 h-9 rounded-full bg-neutral-100 hover:bg-neutral-200 border border-neutral-300 disabled:opacity-30 flex items-center justify-center text-black transition-all cursor-pointer shadow-xs"
               >
@@ -334,18 +352,30 @@ export function Dock({
               <button
                 type="button"
                 onClick={onSubmitDirectTTS}
-                disabled={!inputText.trim() || isProcessing || isRecording}
+                disabled={!inputText.trim() || isGenerating || isRecording}
                 title="Synthesize Speech (TTS)"
                 className="px-3.5 h-9 rounded-full bg-black hover:bg-neutral-800 disabled:opacity-30 disabled:hover:bg-black flex items-center gap-1.5 text-white text-xs font-semibold transition-all cursor-pointer shadow-xs"
               >
                 <Volume2 className="w-3.5 h-3.5" />
                 <span>Speak</span>
               </button>
+            ) : isGenerating ? (
+              <button
+                type="button"
+                id="dock-cancel-generation-btn"
+                onClick={onCancelGeneration}
+                title="Cancel text generation (Esc)"
+                aria-label="Cancel text generation"
+                className="h-9 px-3.5 rounded-full bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm animate-in fade-in"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+                <span>Stop</span>
+              </button>
             ) : (
               <button
                 type="button"
                 onClick={onSubmitText}
-                disabled={!inputText.trim() || isProcessing || isRecording}
+                disabled={!inputText.trim() || isGenerating || isRecording}
                 title="Send Message to Assistant"
                 className="w-9 h-9 rounded-full bg-black hover:bg-neutral-800 disabled:opacity-30 disabled:hover:bg-black flex items-center justify-center text-white transition-all cursor-pointer shadow-xs"
               >

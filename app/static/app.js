@@ -12,7 +12,55 @@ const micIcon = document.getElementById('mic-icon');
 const stopIcon = document.getElementById('stop-icon');
 const textInput = document.getElementById('text-prompt-input');
 const sendBtn = document.getElementById('send-btn');
+const stopGenBtn = document.getElementById('stop-gen-btn');
 const ttsBtn = document.getElementById('tts-btn');
+let isGeneratingText = false;
+let textAbortController = null;
+
+function setGeneratingState(generating) {
+  isGeneratingText = generating;
+  if (stopGenBtn && sendBtn) {
+    if (generating) {
+      stopGenBtn.classList.remove('hidden');
+      sendBtn.classList.add('hidden');
+    } else {
+      stopGenBtn.classList.add('hidden');
+      sendBtn.classList.remove('hidden');
+    }
+  }
+}
+
+function handleCancelGeneration() {
+  if (textAbortController) {
+    textAbortController.abort();
+    textAbortController = null;
+  }
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'cancel' }));
+  }
+  fetch('/api/interrupt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: 'default' }),
+  }).catch(() => {});
+
+  streamAudioQueue.reset();
+  if (audioPlayer) {
+    audioPlayer.pause();
+    audioPlayer.currentTime = 0;
+  }
+
+  setGeneratingState(false);
+  flushTokenBuffer(true);
+  if (activeAssistantBubble) {
+    const textEl = activeAssistantBubble.querySelector('.msg-text');
+    if (textEl && !textEl.textContent.trim()) {
+      textEl.textContent = '(Generation stopped by user)';
+    }
+  }
+  systemStatusText.textContent = 'Generation stopped by user';
+  resetTokenStream();
+}
 const modeTabAssistant = document.getElementById('mode-tab-assistant');
 const modeTabTTS = document.getElementById('mode-tab-tts');
 const modeHintText = document.getElementById('mode-hint-text');
@@ -421,14 +469,32 @@ function handleWebSocketMessage(msg) {
     return;
   }
 
+  if (msg.type === 'cancelled' || msg.type === 'interrupted') {
+    setGeneratingState(false);
+    flushTokenBuffer(true);
+    if (activeAssistantBubble) {
+      const textEl = activeAssistantBubble.querySelector('.msg-text');
+      if (textEl && !textEl.textContent.trim()) {
+        textEl.textContent = '(Generation stopped by user)';
+      }
+    }
+    systemStatusText.textContent = 'Generation stopped by user';
+    resetTokenStream();
+    activeUserBubble = null;
+    activeAssistantBubble = null;
+    currentSentenceCount = 0;
+    return;
+  }
+
   if (msg.type === 'result') {
     // Full generation complete: flush remaining tokens, then reconcile
     // with the authoritative reply text
+    setGeneratingState(false);
     flushTokenBuffer(true);
     if (activeAssistantBubble) {
       const textEl = activeAssistantBubble.querySelector('.msg-text');
       if (msg.assistant_text) {
-        textEl.textContent = msg.assistant_text;
+        textEl.innerHTML = renderMarkdown(msg.assistant_text);
       }
 
       // Attach complete audio play button
@@ -455,6 +521,7 @@ function handleWebSocketMessage(msg) {
   }
 
   if (msg.type === 'error') {
+    setGeneratingState(false);
     systemStatusText.textContent = `Error: ${msg.message}`;
     if (activeAssistantBubble) {
       activeAssistantBubble.querySelector('.msg-text').textContent = `Error: ${msg.message}`;
@@ -793,7 +860,7 @@ async function handleHttpAudioFallback(blob, userMsgEl, assistantMsgEl) {
 
     const data = await res.json();
     userMsgEl.querySelector('.msg-text').textContent = data.user_text;
-    assistantMsgEl.querySelector('.msg-text').textContent = data.assistant_text;
+    assistantMsgEl.querySelector('.msg-text').innerHTML = renderMarkdown(data.assistant_text);
 
     if (data.audio_base64) {
       const audioUrl = `data:audio/wav;base64,${data.audio_base64}`;
@@ -829,6 +896,7 @@ async function handleTextSubmit() {
   textInput.value = '';
   appendMessage('user', text);
   systemStatusText.textContent = 'Streaming reply and synthesizing speech...';
+  setGeneratingState(true);
 
   // Unlock and clear audio queue
   streamAudioQueue.getAudioContext();
@@ -903,7 +971,7 @@ async function handleHttpTTSFallback(text, assistantMsgEl) {
     }
 
     const data = await res.json();
-    assistantMsgEl.querySelector('.msg-text').textContent = data.assistant_text || text;
+    assistantMsgEl.querySelector('.msg-text').innerHTML = renderMarkdown(data.assistant_text || text);
 
     if (data.audio_base64) {
       const audioUrl = `data:audio/wav;base64,${data.audio_base64}`;
@@ -931,11 +999,12 @@ async function handleHttpTTSFallback(text, assistantMsgEl) {
  *
  * Returns the full accumulated reply text.
  */
-async function streamTokensHttp(promptText, onToken) {
+async function streamTokensHttp(promptText, onToken, signal) {
   const res = await fetch('/api/chat/tokens', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message: promptText }),
+    signal: signal,
   });
 
   if (!res.ok || !res.body) {
@@ -984,13 +1053,14 @@ async function handleHttpTextFallback(promptText, assistantMsgEl) {
   const textEl = assistantMsgEl.querySelector('.msg-text');
   resetTokenStream();
   liveTextEl = textEl;
+  textAbortController = new AbortController();
 
   try {
     // Word-by-word token stream for display...
-    const replyText = await streamTokensHttp(promptText, pushToken);
+    const replyText = await streamTokensHttp(promptText, pushToken, textAbortController.signal);
     // ...reconciled with the authoritative accumulated text.
     flushTokenBuffer(true);
-    textEl.textContent = replyText;
+    textEl.innerHTML = renderMarkdown(replyText);
     chatContainer.scrollTop = chatContainer.scrollHeight;
 
     const ttsRes = await fetch('/api/tts', {
@@ -1001,6 +1071,7 @@ async function handleHttpTextFallback(promptText, assistantMsgEl) {
         speaker: speakerSelect.value,
         device: activeTtsDevice,
       }),
+      signal: textAbortController.signal,
     });
 
     if (ttsRes.ok) {
@@ -1015,12 +1086,76 @@ async function handleHttpTextFallback(promptText, assistantMsgEl) {
 
     systemStatusText.textContent = 'All Pipelines Active • Ready for Voice Input';
   } catch (err) {
+    if (err.name === 'AbortError') {
+      systemStatusText.textContent = 'Generation stopped by user';
+      if (textEl && !textEl.textContent.trim()) {
+        textEl.textContent = '(Generation stopped by user)';
+      }
+      return;
+    }
     console.error('HTTP text fallback error:', err);
     assistantMsgEl.querySelector('.msg-text').textContent = `Error: ${err.message}`;
     systemStatusText.textContent = 'Error processing text.';
   } finally {
+    setGeneratingState(false);
+    textAbortController = null;
     resetTokenStream();
   }
+}
+
+// ============================================================================
+// Markdown Formatting Utility
+// ============================================================================
+function renderMarkdown(text) {
+  if (!text) return '';
+  let escaped = String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Code blocks: ```lang ... ```
+  escaped = escaped.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (match, lang, code) => {
+    return `<div class="code-block-wrapper"><div class="code-header"><span>${lang || 'code'}</span></div><pre><code>${code.trim()}</code></pre></div>`;
+  });
+
+  // Inline code: `code`
+  escaped = escaped.replace(/`([^`\n]+)`/g, '<code class="inline-code">$1</code>');
+
+  // Bold + Italic: ***text***
+  escaped = escaped.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>');
+
+  // Bold: **text** or __text__
+  escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  escaped = escaped.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+
+  // Italic: *text* or _text_
+  escaped = escaped.replace(/(^|[^\*])\*([^\*\n]+)\*([^\*]|$)/g, '$1<em>$2</em>$3');
+  escaped = escaped.replace(/(^|[^_])_([^_\n]+)_([^_]|$)/g, '$1<em>$2</em>$3');
+
+  // Strikethrough: ~~text~~
+  escaped = escaped.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+
+  // Headers
+  escaped = escaped.replace(/^### (.*$)/gim, '<h4 class="md-heading">$1</h4>');
+  escaped = escaped.replace(/^## (.*$)/gim, '<h3 class="md-heading">$1</h3>');
+  escaped = escaped.replace(/^# (.*$)/gim, '<h2 class="md-heading">$1</h2>');
+
+  // Blockquote
+  escaped = escaped.replace(/^\> (.*$)/gim, '<blockquote class="md-quote">$1</blockquote>');
+
+  // Links
+  escaped = escaped.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+
+  // Lists: numbered lines (1. Item)
+  escaped = escaped.replace(/^(\d+)\.\s+(.*$)/gim, '<div class="md-list-item"><span class="md-list-num">$1.</span> <span class="md-list-body">$2</span></div>');
+
+  // Lists: bullet lines (- Item or * Item)
+  escaped = escaped.replace(/^[-*]\s+(.*$)/gim, '<div class="md-list-item"><span class="md-list-bullet">•</span> <span class="md-list-body">$1</span></div>');
+
+  // Line breaks
+  escaped = escaped.replace(/\n/g, '<br/>');
+
+  return escaped;
 }
 
 // ============================================================================
@@ -1258,7 +1393,15 @@ micBtn.addEventListener('click', () => {
 });
 
 sendBtn.addEventListener('click', handleTextSubmit);
+if (stopGenBtn) stopGenBtn.addEventListener('click', handleCancelGeneration);
 if (ttsBtn) ttsBtn.addEventListener('click', handleDirectTTSSubmit);
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && isGeneratingText) {
+    e.preventDefault();
+    handleCancelGeneration();
+  }
+});
 
 function setInteractionMode(mode) {
   activeInteractionMode = mode;

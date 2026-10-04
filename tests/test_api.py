@@ -523,6 +523,95 @@ def test_websocket_think_mode_control() -> None:
         assert msg["reasoning_effort"] == "medium"
 
 
+def test_cancel_endpoints() -> None:
+    """Verifies POST /api/cancel and /api/chat/cancel endpoints."""
+    # Test POST /api/cancel
+    resp = client.post("/api/cancel", json={"session_id": "test_session"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["cancelled"] is True
+    assert data["interrupted"] is True
+    assert data["session_id"] == "test_session"
+
+    # Test POST /api/chat/cancel
+    resp2 = client.post("/api/chat/cancel", json={"session_id": "test_session_2"})
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+    assert data2["cancelled"] is True
+    assert data2["interrupted"] is True
+    assert data2["session_id"] == "test_session_2"
+
+
+def test_websocket_cancel_active_text_generation() -> None:
+    """Verifies that sending a 'cancel' frame halts text generation and sends 'cancelled'."""
+    import asyncio
+    from unittest.mock import patch
+    import numpy as np
+    from app.api.websocket import ws_pipeline
+
+    async def slow_tokens(*args, **kwargs):
+        yield "First token... "
+        await asyncio.sleep(0.5)
+        yield "Second token should not complete."
+
+    with patch.object(
+        ws_pipeline.llm, "stream_response", new=slow_tokens
+    ), patch.object(
+        ws_pipeline.tts,
+        "synthesize",
+        return_value=(np.zeros(24000, dtype=np.float32), 24000),
+    ):
+        with client.websocket_connect("/ws/assistant") as websocket:
+            websocket.send_json({"type": "text", "prompt": "Generate a long story", "play_audio": False})
+
+            # Wait for initial token or status frame
+            received_initial = False
+            for _ in range(5):
+                msg = websocket.receive_json()
+                if msg.get("type") in ("token", "status"):
+                    received_initial = True
+                    break
+
+            assert received_initial
+
+            # Immediately send cancel
+            websocket.send_json({"type": "cancel"})
+
+            # We must receive a cancelled frame
+            got_cancelled = False
+            for _ in range(10):
+                msg = websocket.receive_json()
+                if msg.get("type") == "cancelled":
+                    got_cancelled = True
+                    assert msg.get("message") == "Generation stopped by user"
+                    break
+
+            assert got_cancelled
+
+
+def test_chat_tokens_disconnect() -> None:
+    """Verifies that disconnecting from /api/chat/tokens exits cleanly."""
+    import asyncio
+    from unittest.mock import patch
+    from app.api import routes
+
+    async def slow_tokens(*args, **kwargs):
+        yield "Token 1 "
+        await asyncio.sleep(0.2)
+        yield "Token 2"
+
+    with patch.object(routes.pipeline.llm, "stream_response", new=slow_tokens):
+        with client.stream(
+            "POST", "/api/chat/tokens", json={"message": "Hi"}
+        ) as response:
+            assert response.status_code == 200
+            for line in response.iter_lines():
+                if "Token 1" in line:
+                    break
+            # Exiting client.stream disconnects the client early
+
+
+
 
 
 

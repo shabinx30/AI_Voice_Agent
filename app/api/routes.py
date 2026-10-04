@@ -8,7 +8,7 @@ import asyncio
 import base64
 import logging
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -515,11 +515,12 @@ async def chat_completion(request: ChatRequest) -> ChatResponse:
 
 
 @router.post("/chat/stream")
-async def chat_streaming(request: ChatRequest) -> StreamingResponse:
+async def chat_streaming(request: ChatRequest, raw_req: Request) -> StreamingResponse:
     """Streams sentence chunks from LM Studio LLM using Server-Sent Events (SSE).
 
     Args:
         request: Chat message request payload.
+        raw_req: FastAPI request to detect client disconnection / cancellation.
 
     Returns:
         SSE text/event-stream yielding sentence chunks as they complete.
@@ -540,17 +541,21 @@ async def chat_streaming(request: ChatRequest) -> StreamingResponse:
                 system_prompt=request.system_prompt,
                 history=history,
             ):
+                if await raw_req.is_disconnected():
+                    logger.info("Client disconnected from /chat/stream; aborting stream.")
+                    break
                 full_reply_parts.append(sentence)
                 payload = json.dumps({"index": chunk_idx, "sentence": sentence})
                 yield f"data: {payload}\n\n"
                 chunk_idx += 1
 
-            # Update per-session history on completion
-            complete_text = " ".join(full_reply_parts).strip()
-            await pipeline._append_history(
-                request.session_id, request.message, complete_text
-            )
-            yield "data: [DONE]\n\n"
+            if not await raw_req.is_disconnected():
+                # Update per-session history on completion
+                complete_text = " ".join(full_reply_parts).strip()
+                await pipeline._append_history(
+                    request.session_id, request.message, complete_text
+                )
+                yield "data: [DONE]\n\n"
         except Exception as exc:
             logger.error("SSE stream error: %s", exc)
             err_data = json.dumps({"error": str(exc)})
@@ -560,7 +565,7 @@ async def chat_streaming(request: ChatRequest) -> StreamingResponse:
 
 
 @router.post("/chat/tokens")
-async def chat_token_stream(request: ChatRequest) -> StreamingResponse:
+async def chat_token_stream(request: ChatRequest, raw_req: Request) -> StreamingResponse:
     """Streams raw LLM token deltas for word-by-word text display.
 
     Emits SSE ``token`` events for generated tokens as they arrive from
@@ -570,6 +575,7 @@ async def chat_token_stream(request: ChatRequest) -> StreamingResponse:
 
     Args:
         request: Chat message request payload.
+        raw_req: FastAPI request to detect client disconnection / cancellation.
 
     Returns:
         SSE text/event-stream yielding token deltas.
@@ -593,6 +599,9 @@ async def chat_token_stream(request: ChatRequest) -> StreamingResponse:
                     think_mode=request.think_mode,
                 )
                 async for token_type, token in token_stream:
+                    if await raw_req.is_disconnected():
+                        logger.info("Client disconnected from /chat/tokens; aborting LLM stream.")
+                        break
                     if not token:
                         continue
                     if token_type == "thought":
@@ -607,16 +616,20 @@ async def chat_token_stream(request: ChatRequest) -> StreamingResponse:
                     system_prompt=request.system_prompt,
                     history=history,
                 ):
+                    if await raw_req.is_disconnected():
+                        logger.info("Client disconnected from /chat/tokens; aborting LLM stream.")
+                        break
                     if not token:
                         continue
                     full_reply_parts.append(token)
                     payload = json.dumps({"token": token, "type": "content"})
                     yield f"data: {payload}\n\n"
-            complete_text = "".join(full_reply_parts)
-            await pipeline._append_history(
-                request.session_id, request.message, complete_text
-            )
-            yield "data: [DONE]\n\n"
+            if not await raw_req.is_disconnected():
+                complete_text = "".join(full_reply_parts)
+                await pipeline._append_history(
+                    request.session_id, request.message, complete_text
+                )
+                yield "data: [DONE]\n\n"
         except Exception as exc:
             logger.error("Token SSE stream error: %s", exc)
             err_data = json.dumps({"error": str(exc)})
@@ -888,23 +901,30 @@ class InterruptRequest(BaseModel):
 
 
 @router.post("/interrupt")
+@router.post("/cancel")
+@router.post("/chat/cancel")
 async def interrupt_session(request: InterruptRequest) -> Dict[str, Any]:
-    """Immediately stops LLM/TTS/playback for a session (barge-in).
+    """Immediately stops LLM/TTS/playback for a session (barge-in / cancel).
 
     Stops pending TTS jobs, clears the audio queue, and aborts the in-flight
     LLM stream so a new user utterance can start without hearing stale audio.
 
     Args:
-        request: Session key to interrupt.
+        request: Session key to interrupt or cancel.
 
     Returns:
-        Dict with interruption acknowledgement.
+        Dict with interruption and cancellation acknowledgement.
     """
     try:
         pipeline.cancel(request.session_id)
-        return {"interrupted": True, "session_id": request.session_id}
+        return {
+            "interrupted": True,
+            "cancelled": True,
+            "session_id": request.session_id,
+            "message": "Generation stopped by user",
+        }
     except Exception as exc:
-        logger.error("API interrupt error: %s", exc)
+        logger.error("API interrupt/cancel error: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Interrupt failed: {exc}",

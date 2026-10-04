@@ -869,3 +869,81 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.3);
 }
+
+/* Markdown formatting in messages */
+.msg-text strong {
+  font-weight: 700;
+  color: #000000;
+}
+
+.msg-text em {
+  font-style: italic;
+}
+
+.msg-text .md-heading {
+  font-weight: 700;
+  margin: 8px 0 4px 0;
+  color: #000000;
+}
+
+.msg-text .md-quote {
+  border-left: 3px solid #d1d5db;
+  padding: 4px 8px;
+  margin: 6px 0;
+  color: #4b5563;
+  background: #f9fafb;
+  border-radius: 0 4px 4px 0;
+  font-style: italic;
+}
+
+.msg-text .md-list-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.msg-text .md-list-num {
+  font-weight: 600;
+  color: #374151;
+  min-width: 16px;
+}
+
+.msg-text .md-list-bullet {
+  font-weight: bold;
+  color: #374151;
+}
+
+.msg-text .inline-code {
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.85em;
+}
+
+.msg-text .code-block-wrapper {
+  margin: 8px 0;
+  background: #0f172a;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #1e293b;
+}
+
+.msg-text .code-header {
+  background: #1e293b;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  padding: 4px 10px;
+  text-transform: uppercase;
+}
+
+.msg-text .code-block-wrapper pre {
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  color: #f1f5f9;
+  font-size: 0.82rem;
+  font-family: monospace;
+}
