@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Mic, RefreshCw, Cpu, Sparkles, Bot, Eject, Zap, Brain } from "lucide-react";
+import { Mic, RefreshCw, Cpu, Sparkles, Bot, Eject, Zap } from "lucide-react";
 import { HealthStatus, LMStudioModelInfo } from "@/lib/types";
 
 interface SidebarProps {
@@ -15,10 +15,6 @@ interface SidebarProps {
   isEjectingModel?: boolean;
   selectedSpeaker: string;
   onSelectSpeaker: (speaker: string) => void;
-  selectedTTSDevice: string;
-  onSelectTTSDevice: (device: string) => void;
-  isSwitchingTTSDevice?: boolean;
-  availableTTSDevices?: string[];
   ttsEffectiveDevice?: string;
   playHostAudio: boolean;
   onTogglePlayHostAudio: (val: boolean) => void;
@@ -26,11 +22,6 @@ interface SidebarProps {
   onRefreshHealth: () => void;
   isOpenMobile?: boolean;
   onCloseMobile?: () => void;
-  thinkMode?: boolean;
-  onToggleThinkMode?: (enabled?: boolean, effort?: string) => void;
-  supportsThinking?: boolean;
-  reasoningEffort?: string;
-  onChangeReasoningEffort?: (effort: string) => void;
 }
 
 export function Sidebar({
@@ -44,10 +35,6 @@ export function Sidebar({
   isEjectingModel,
   selectedSpeaker,
   onSelectSpeaker,
-  selectedTTSDevice,
-  onSelectTTSDevice,
-  isSwitchingTTSDevice,
-  availableTTSDevices,
   ttsEffectiveDevice,
   playHostAudio,
   onTogglePlayHostAudio,
@@ -55,11 +42,6 @@ export function Sidebar({
   onRefreshHealth,
   isOpenMobile,
   onCloseMobile,
-  thinkMode,
-  onToggleThinkMode,
-  supportsThinking,
-  reasoningEffort,
-  onChangeReasoningEffort,
 }: SidebarProps) {
   // Helper to format speaker names nicely
   const formatSpeakerName = (spk: string) => {
@@ -214,132 +196,11 @@ export function Sidebar({
               </span>
             </div>
             <span className="text-[10px] font-mono text-black bg-neutral-200/80 px-1.5 py-0.5 rounded uppercase font-semibold">
-              {ttsEffectiveDevice || selectedTTSDevice.toUpperCase()}
+              {ttsEffectiveDevice || health?.tts_device || "NPU"}
             </span>
           </div>
-          <div className="text-[12px] font-mono text-neutral-600 truncate mb-2.5">
+          <div className="text-[12px] font-mono text-neutral-600 truncate">
             {health?.tts_model ? health.tts_model.split("/").pop() : "Kokoro-82M"}
-          </div>
-
-          {/* Processing Unit Selector inside Kokoro TTS Card */}
-          <div className="pt-2 border-t border-neutral-200/80 flex flex-col gap-1.5">
-            <div className="flex items-center justify-between text-[11px]">
-              <span className="text-neutral-600 font-medium flex items-center gap-1.5">
-                <Cpu className="w-3 h-3 text-black" />
-                Processing Unit
-              </span>
-              {isSwitchingTTSDevice ? (
-                <span className="text-[10px] font-mono text-neutral-500 flex items-center gap-1">
-                  <RefreshCw className="w-2.5 h-2.5 animate-spin text-black" />
-                  Switching...
-                </span>
-              ) : (
-                <span className="text-[10px] font-mono text-black font-semibold">
-                  {selectedTTSDevice.toLowerCase() === "npu_only"
-                    ? "NPU Only (3/3 Stages)"
-                    : selectedTTSDevice.toLowerCase() === "npu"
-                    ? "NPU (Hybrid)"
-                    : "Host CPU"}
-                </span>
-              )}
-            </div>
-
-            {/* Segmented Control Buttons */}
-            <div className="grid grid-cols-3 gap-1 p-1 bg-neutral-100 rounded-lg border border-neutral-200">
-              <button
-                type="button"
-                id="tts-unit-cpu-btn"
-                onClick={() => onSelectTTSDevice("cpu")}
-                disabled={isSwitchingTTSDevice}
-                className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-md text-xs font-semibold transition-all duration-200 cursor-pointer disabled:opacity-50 ${
-                  selectedTTSDevice.toLowerCase() === "cpu"
-                    ? "bg-black text-white shadow-xs"
-                    : "bg-transparent text-neutral-600 hover:text-black hover:bg-white"
-                }`}
-              >
-                <span>CPU</span>
-                <span
-                  className={`text-[8.5px] font-normal tracking-tight ${
-                    selectedTTSDevice.toLowerCase() === "cpu"
-                      ? "text-neutral-300"
-                      : "text-neutral-400"
-                  }`}
-                >
-                  Host CPU
-                </span>
-              </button>
-
-              <button
-                type="button"
-                id="tts-unit-npu-btn"
-                onClick={() => onSelectTTSDevice("npu")}
-                disabled={isSwitchingTTSDevice}
-                className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-md text-xs font-semibold transition-all duration-200 cursor-pointer disabled:opacity-50 ${
-                  selectedTTSDevice.toLowerCase() === "npu"
-                    ? "bg-black text-white shadow-xs"
-                    : "bg-transparent text-neutral-600 hover:text-black hover:bg-white"
-                }`}
-              >
-                <span className="flex items-center gap-1">
-                  <Zap
-                    className={`w-2.5 h-2.5 ${
-                      selectedTTSDevice.toLowerCase() === "npu"
-                        ? "text-amber-300 fill-amber-300"
-                        : "text-neutral-500"
-                    }`}
-                  />
-                  <span>NPU</span>
-                </span>
-                <span
-                  className={`text-[8.5px] font-normal tracking-tight ${
-                    selectedTTSDevice.toLowerCase() === "npu"
-                      ? "text-neutral-300"
-                      : "text-neutral-400"
-                  }`}
-                >
-                  Hybrid
-                </span>
-              </button>
-
-              <button
-                type="button"
-                id="tts-unit-npu-only-btn"
-                onClick={() => onSelectTTSDevice("npu_only")}
-                disabled={isSwitchingTTSDevice}
-                className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-md text-xs font-semibold transition-all duration-200 cursor-pointer disabled:opacity-50 ${
-                  selectedTTSDevice.toLowerCase() === "npu_only"
-                    ? "bg-black text-white shadow-xs"
-                    : "bg-transparent text-neutral-600 hover:text-black hover:bg-white"
-                }`}
-              >
-                <span className="flex items-center gap-1">
-                  <Zap
-                    className={`w-2.5 h-2.5 ${
-                      selectedTTSDevice.toLowerCase() === "npu_only"
-                        ? "text-amber-300 fill-amber-300"
-                        : "text-neutral-500"
-                    }`}
-                  />
-                  <span>NPU Only</span>
-                </span>
-                <span
-                  className={`text-[8.5px] font-normal tracking-tight ${
-                    selectedTTSDevice.toLowerCase() === "npu_only"
-                      ? "text-neutral-300"
-                      : "text-neutral-400"
-                  }`}
-                >
-                  Full NPU
-                </span>
-              </button>
-            </div>
-            <span className="text-[10px] text-neutral-500 px-0.5">
-              {selectedTTSDevice.toLowerCase() === "npu_only"
-                ? "All static neural encoder stages running on Intel AI Boost NPU."
-                : selectedTTSDevice.toLowerCase() === "npu"
-                ? "Intel AI Boost NPU + CPU ALBERT for optimal speech fidelity."
-                : "Standard multi-threaded host CPU speech synthesis."}
-            </span>
           </div>
         </div>
       </div>
@@ -422,81 +283,6 @@ export function Sidebar({
               <span>{activeModelInfo.size_formatted ? `Size: ${activeModelInfo.size_formatted}` : ""}</span>
             </div>
           )}
-        </div>
-
-        {/* Think Mode & Reasoning Controls Card */}
-        <div className="p-3 rounded-xl bg-neutral-100 border border-neutral-200 flex flex-col gap-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5">
-              <Brain className={`w-3.5 h-3.5 ${thinkMode ? "text-violet-600" : "text-neutral-500"}`} />
-              <span className="text-xs font-semibold text-black">Think Mode</span>
-            </div>
-            {supportsThinking ? (
-              <span className="text-[10px] font-mono text-violet-700 bg-violet-50 border border-violet-200 px-1.5 py-0.5 rounded font-medium">
-                Reasoning Model
-              </span>
-            ) : (
-              <span className="text-[10px] font-mono text-neutral-500 bg-neutral-200/60 px-1.5 py-0.5 rounded">
-                Standard Model
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-neutral-600 text-[11px]">Stream LLM reasoning chain</span>
-            <button
-              type="button"
-              id="sidebar-think-mode-toggle"
-              role="switch"
-              aria-checked={Boolean(thinkMode)}
-              onClick={() => onToggleThinkMode?.(!thinkMode)}
-              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                thinkMode ? "bg-violet-600" : "bg-neutral-300"
-              }`}
-            >
-              <span
-                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                  thinkMode ? "translate-x-4" : "translate-x-0"
-                }`}
-              />
-            </button>
-          </div>
-
-          {/* Reasoning Effort Selector */}
-          {thinkMode && (
-            <div className="pt-2 border-t border-neutral-200/80 flex flex-col gap-1.5 animate-in fade-in duration-150">
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="text-neutral-500">Reasoning Effort</span>
-                <span className="text-black font-semibold font-mono uppercase text-[10px]">
-                  {reasoningEffort || "medium"}
-                </span>
-              </div>
-              <div className="grid grid-cols-3 gap-1 p-0.5 bg-neutral-200/60 rounded-lg">
-                {(["low", "medium", "high"] as const).map((eff) => (
-                  <button
-                    key={eff}
-                    type="button"
-                    onClick={() => onChangeReasoningEffort?.(eff)}
-                    className={`py-1 text-[10px] font-semibold uppercase rounded-md transition-all cursor-pointer ${
-                      (reasoningEffort || "medium") === eff
-                        ? "bg-black text-white shadow-2xs"
-                        : "text-neutral-600 hover:text-black hover:bg-white/60"
-                    }`}
-                  >
-                    {eff}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="text-[10px] text-neutral-500 leading-tight">
-            {thinkMode
-              ? "Thoughts are rendered in an accordion in chat. Speech synthesis reads only the final answer."
-              : supportsThinking
-              ? "Enable to inspect the model's step-by-step reasoning tokens."
-              : "Active model may not emit thoughts, but think mode flag will be sent."}
-          </div>
         </div>
       </div>
 

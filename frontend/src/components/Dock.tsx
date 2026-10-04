@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useRef, useEffect } from "react";
-import { Mic, Square, Send, Volume2, Bot } from "lucide-react";
+import { Mic, Square, Send, Volume2, Bot, Brain } from "lucide-react";
 
 interface DockProps {
   isRecording: boolean;
@@ -15,6 +15,12 @@ interface DockProps {
   interactionMode: "assistant" | "tts";
   onToggleInteractionMode: (mode: "assistant" | "tts") => void;
   isProcessing: boolean;
+  thinkMode?: boolean;
+  onToggleThinkMode?: () => void;
+  supportsThinking?: boolean;
+  reasoningEffort?: "low" | "medium" | "high";
+  onChangeReasoningEffort?: (effort: "low" | "medium" | "high") => void;
+  activeModel?: string;
 }
 
 export function Dock({
@@ -29,6 +35,12 @@ export function Dock({
   interactionMode,
   onToggleInteractionMode,
   isProcessing,
+  thinkMode,
+  onToggleThinkMode,
+  supportsThinking,
+  reasoningEffort,
+  onChangeReasoningEffort,
+  activeModel,
 }: DockProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number | null>(null);
@@ -140,37 +152,120 @@ export function Dock({
         )}
       </div>
 
-      {/* Mode Selector Row */}
-      <div className="flex items-center justify-between px-1 text-xs">
-        <div className="flex items-center p-0.5 rounded-lg bg-neutral-100 border border-neutral-200">
-          <button
-            type="button"
-            onClick={() => onToggleInteractionMode("assistant")}
-            className={`px-3 py-1 rounded-md font-medium flex items-center gap-1.5 transition-all cursor-pointer ${
-              interactionMode === "assistant"
-                ? "bg-black text-white shadow-xs"
-                : "text-neutral-600 hover:text-black"
-            }`}
-          >
-            <Bot className="w-3.5 h-3.5" />
-            <span>AI Assistant</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onToggleInteractionMode("tts")}
-            className={`px-3 py-1 rounded-md font-medium flex items-center gap-1.5 transition-all cursor-pointer ${
-              interactionMode === "tts"
-                ? "bg-black text-white shadow-xs"
-                : "text-neutral-600 hover:text-black"
-            }`}
-          >
-            <Volume2 className="w-3.5 h-3.5" />
-            <span>Direct TTS Tool</span>
-          </button>
+      {/* Mode Selector & Controls Row */}
+      <div className="flex items-center justify-between px-1 text-xs gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center p-0.5 rounded-lg bg-neutral-100 border border-neutral-200">
+            <button
+              type="button"
+              onClick={() => onToggleInteractionMode("assistant")}
+              className={`px-3 py-1 rounded-md font-medium flex items-center gap-1.5 transition-all cursor-pointer ${
+                interactionMode === "assistant"
+                  ? "bg-black text-white shadow-xs"
+                  : "text-neutral-600 hover:text-black"
+              }`}
+            >
+              <Bot className="w-3.5 h-3.5" />
+              <span>AI Assistant</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onToggleInteractionMode("tts")}
+              className={`px-3 py-1 rounded-md font-medium flex items-center gap-1.5 transition-all cursor-pointer ${
+                interactionMode === "tts"
+                  ? "bg-black text-white shadow-xs"
+                  : "text-neutral-600 hover:text-black"
+              }`}
+            >
+              <Volume2 className="w-3.5 h-3.5" />
+              <span>Direct TTS Tool</span>
+            </button>
+          </div>
+
+          {/* Think Mode Toggle & Reasoning Effort */}
+          {interactionMode === "assistant" && onToggleThinkMode && (
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                id="dock-think-mode-toggle"
+                onClick={supportsThinking ? onToggleThinkMode : undefined}
+                disabled={!supportsThinking}
+                aria-disabled={!supportsThinking}
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 border transition-all select-none ${
+                  !supportsThinking
+                    ? "opacity-50 bg-neutral-100 text-neutral-400 border-neutral-200 cursor-not-allowed shadow-none"
+                    : thinkMode
+                    ? "bg-violet-600 text-white border-violet-700 shadow-2xs hover:bg-violet-700 cursor-pointer"
+                    : "bg-neutral-100 hover:bg-neutral-200 text-neutral-700 hover:text-black border-neutral-300 shadow-2xs cursor-pointer"
+                }`}
+                title={
+                  supportsThinking
+                    ? `Think Mode: ${
+                        thinkMode
+                          ? "ON (" + (reasoningEffort || "medium") + " effort)"
+                          : "OFF"
+                      }. Click to toggle reasoning tokens.`
+                    : `Think Mode is not supported by ${activeModel || "the active model"}. Select a reasoning model (e.g. DeepSeek-R1, Qwen3, QwQ) to enable.`
+                }
+              >
+                <Brain
+                  className={`w-3.5 h-3.5 ${
+                    !supportsThinking
+                      ? "text-neutral-400"
+                      : thinkMode
+                      ? "text-violet-200 animate-pulse"
+                      : "text-neutral-500"
+                  }`}
+                />
+                <span>
+                  {supportsThinking
+                    ? `Think ${thinkMode ? "ON" : "OFF"}`
+                    : "Think"}
+                </span>
+                {supportsThinking ? (
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      thinkMode ? "bg-emerald-300" : "bg-neutral-400"
+                    }`}
+                    title="Reasoning model supported"
+                  />
+                ) : (
+                  <span className="text-[9px] font-mono uppercase bg-neutral-200/80 text-neutral-400 px-1 py-0.2 rounded font-normal">
+                    N/A
+                  </span>
+                )}
+              </button>
+
+              {/* Reasoning Effort Selector (shown ONLY when Think Mode is active and supported) */}
+              {supportsThinking && thinkMode && onChangeReasoningEffort && (
+                <div className="flex items-center bg-neutral-100 border border-neutral-200 rounded-lg p-0.5 text-[10px] animate-in fade-in duration-150">
+                  {(["low", "medium", "high"] as const).map((eff) => (
+                    <button
+                      key={eff}
+                      type="button"
+                      onClick={() => onChangeReasoningEffort(eff)}
+                      className={`px-2 py-0.5 rounded font-semibold uppercase transition-all cursor-pointer ${
+                        (reasoningEffort || "medium") === eff
+                          ? "bg-black text-white shadow-2xs"
+                          : "text-neutral-500 hover:text-black hover:bg-white/60"
+                      }`}
+                    >
+                      {eff}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
+
         <div className="text-[11px] text-neutral-500 font-mono hidden sm:inline-block">
           {interactionMode === "tts"
             ? "Kokoro-82M speech synthesis (bypasses LLM)"
+            : supportsThinking && thinkMode
+            ? "Reasoning tokens enabled"
+            : supportsThinking
+            ? "Reasoning model ready"
             : "Conversational voice & text agent"}
         </div>
       </div>
@@ -208,10 +303,16 @@ export function Dock({
                 ? "Listening to voice input..."
                 : interactionMode === "tts"
                 ? "Type text to synthesize and speak directly with Kokoro TTS..."
+                : supportsThinking && thinkMode
+                ? "Type a message (Think mode active)..."
                 : "Type a message or click mic to talk..."
             }
             disabled={isRecording}
-            className="w-full h-12 bg-white border border-neutral-300 focus:border-black rounded-full pl-5 pr-22 text-sm text-black placeholder:text-neutral-400 outline-none transition-all focus:ring-2 focus:ring-black/10 disabled:opacity-50"
+            className={`w-full h-12 bg-white border rounded-full pl-5 pr-22 text-sm text-black placeholder:text-neutral-400 outline-none transition-all focus:ring-2 disabled:opacity-50 ${
+              supportsThinking && thinkMode
+                ? "border-violet-300 focus:border-violet-600 focus:ring-violet-500/10"
+                : "border-neutral-300 focus:border-black focus:ring-black/10"
+            }`}
           />
 
           <div className="absolute right-1.5 flex items-center gap-1">

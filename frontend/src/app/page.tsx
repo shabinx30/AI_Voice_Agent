@@ -69,12 +69,12 @@ export default function NexusVoiceApp() {
           return Boolean(modelIdOrInfo.supports_thinking);
         }
         const text = `${modelIdOrInfo.id} ${modelIdOrInfo.name || ""} ${modelIdOrInfo.architecture || ""}`.toLowerCase();
-        return ["qwen3", "deepseek-r1", "r1", "think", "reason", "qwq", "bonsai", "cot"].some((k) =>
+        return ["qwen3", "deepseek-r1", "r1", "think", "reason", "qwq", "bonsai", "cot", "reasoning", "thought"].some((k) =>
           text.includes(k)
         );
       }
       const lower = String(modelIdOrInfo).toLowerCase();
-      return ["qwen3", "deepseek-r1", "r1", "think", "reason", "qwq", "bonsai", "cot"].some((k) =>
+      return ["qwen3", "deepseek-r1", "r1", "think", "reason", "qwq", "bonsai", "cot", "reasoning", "thought"].some((k) =>
         lower.includes(k)
       );
     },
@@ -140,6 +140,9 @@ export default function NexusVoiceApp() {
       }
       if (typeof data.current_model_supports_thinking === "boolean") {
         setSupportsThinking(data.current_model_supports_thinking);
+        if (!data.current_model_supports_thinking) {
+          setThinkMode(false);
+        }
       }
       setStatusText("All Pipelines Active • Ready for Voice Input");
     } catch (err) {
@@ -167,8 +170,10 @@ export default function NexusVoiceApp() {
       if (data.current_model) {
         setSelectedModel(data.current_model);
         const curModel = data.models?.find((m) => m.id === data.current_model);
-        if (curModel) {
-          setSupportsThinking(checkModelSupportsThinking(curModel));
+        const isSupported = checkModelSupportsThinking(curModel || data.current_model);
+        setSupportsThinking(isSupported);
+        if (!isSupported) {
+          setThinkMode(false);
         }
       }
     } catch (err) {
@@ -184,7 +189,11 @@ export default function NexusVoiceApp() {
       if (!modelId) return;
       setSelectedModel(modelId);
       const targetModel = availableModels.find((m) => m.id === modelId);
-      setSupportsThinking(checkModelSupportsThinking(targetModel || modelId));
+      const isSupported = checkModelSupportsThinking(targetModel || modelId);
+      setSupportsThinking(isSupported);
+      if (!isSupported) {
+        setThinkMode(false);
+      }
 
       setStatusText(`Ejecting other models and activating ${modelId}...`);
       try {
@@ -227,6 +236,10 @@ export default function NexusVoiceApp() {
   // Handle Think Mode Switch & Reasoning Effort
   const handleToggleThinkMode = useCallback(
     async (enabled?: boolean, effort?: string) => {
+      if (!supportsThinking) {
+        setStatusText("Thinking mode is not supported by the active model");
+        return;
+      }
       const nextEnabled = enabled !== undefined ? enabled : !thinkMode;
       const nextEffort = effort || reasoningEffort;
       setThinkMode(nextEnabled);
@@ -250,15 +263,14 @@ export default function NexusVoiceApp() {
         });
         if (res.ok) {
           const data = await res.json();
-          setThinkMode(data.think_mode);
+          const effectiveSupport = typeof data.supports_thinking === "boolean" ? data.supports_thinking : supportsThinking;
+          setSupportsThinking(effectiveSupport);
+          setThinkMode(Boolean(data.think_mode && effectiveSupport));
           setReasoningEffort(data.reasoning_effort);
-          if (typeof data.supports_thinking === "boolean") {
-            setSupportsThinking(data.supports_thinking);
-          }
           setStatusText(
             data.message ||
-              `Think Mode ${data.think_mode ? "Enabled" : "Disabled"}${
-                data.supports_thinking ? " (Reasoning Model)" : ""
+              `Think Mode ${data.think_mode && effectiveSupport ? "Enabled" : "Disabled"}${
+                effectiveSupport ? " (Reasoning Model)" : ""
               }`
           );
         }
@@ -278,7 +290,7 @@ export default function NexusVoiceApp() {
         setStatusText(`Failed to update think mode: ${err}`);
       }
     },
-    [thinkMode, reasoningEffort]
+    [thinkMode, reasoningEffort, supportsThinking]
   );
 
   // Handle Model Eject (unloads model from memory to free VRAM)
@@ -1233,10 +1245,6 @@ export default function NexusVoiceApp() {
         isEjectingModel={isEjectingModel}
         selectedSpeaker={selectedSpeaker}
         onSelectSpeaker={setSelectedSpeaker}
-        selectedTTSDevice={selectedTTSDevice}
-        onSelectTTSDevice={handleSelectTTSDevice}
-        isSwitchingTTSDevice={isSwitchingTTSDevice}
-        availableTTSDevices={availableTTSDevices}
         ttsEffectiveDevice={ttsEffectiveDevice}
         playHostAudio={playHostAudio}
         onTogglePlayHostAudio={setPlayHostAudio}
@@ -1244,11 +1252,6 @@ export default function NexusVoiceApp() {
         onRefreshHealth={checkHealth}
         isOpenMobile={mobileSidebarOpen}
         onCloseMobile={() => setMobileSidebarOpen(false)}
-        thinkMode={thinkMode}
-        onToggleThinkMode={handleToggleThinkMode}
-        supportsThinking={supportsThinking}
-        reasoningEffort={reasoningEffort}
-        onChangeReasoningEffort={(eff) => handleToggleThinkMode(thinkMode, eff)}
       />
 
       {/* Main Content Area */}
@@ -1258,12 +1261,6 @@ export default function NexusVoiceApp() {
           statusText={statusText}
           metrics={metrics}
           onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
-          ttsDevice={selectedTTSDevice}
-          onSelectTTSDevice={handleSelectTTSDevice}
-          thinkMode={thinkMode}
-          onToggleThinkMode={() => handleToggleThinkMode()}
-          supportsThinking={supportsThinking}
-          reasoningEffort={reasoningEffort}
         />
 
         {/* Chat Area Component */}
@@ -1289,6 +1286,12 @@ export default function NexusVoiceApp() {
           interactionMode={interactionMode}
           onToggleInteractionMode={setInteractionMode}
           isProcessing={isProcessing}
+          thinkMode={thinkMode}
+          onToggleThinkMode={() => handleToggleThinkMode()}
+          supportsThinking={supportsThinking}
+          reasoningEffort={reasoningEffort}
+          onChangeReasoningEffort={(eff) => handleToggleThinkMode(thinkMode, eff)}
+          activeModel={selectedModel}
         />
       </main>
 
