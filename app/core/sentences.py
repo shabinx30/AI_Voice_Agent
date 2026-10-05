@@ -238,7 +238,23 @@ class SentenceBuffer:
         if not buf or not buf.strip():
             return None
 
-        # 1. Hard split on newline.
+        # 1. Sentence-ending punctuation (. ! ?) followed by whitespace or newline.
+        for match in _SENT_END_RE.finditer(buf):
+            candidate = buf[:match.start() + len(match.group(1).rstrip())].strip()
+            if not candidate or not any(c.isalnum() for c in candidate):
+                continue
+            if is_abbreviation(candidate):
+                continue
+            if _ends_with_decimal(candidate):
+                continue
+            if len(candidate) >= self.min_chars:
+                self._buffer = buf[match.end():].lstrip()
+                return candidate
+            # Too short: keep waiting for more tokens (avoids "Hi." / "Ok."
+            # each costing a full Kokoro round-trip).
+            continue
+
+        # 2. Hard split on newline (e.g. headings or bullet items without terminal punctuation).
         newline_pos = buf.find("\n")
         if newline_pos != -1:
             chunk = buf[:newline_pos].strip()
@@ -259,23 +275,6 @@ class SentenceBuffer:
                 buf = rest
                 if not buf or not buf.strip():
                     return None
-                # Fall through to punctuation checks on the remainder.
-
-        # 2. Sentence-ending punctuation (. ! ?) followed by whitespace.
-        for match in _SENT_END_RE.finditer(buf):
-            candidate = buf[:match.start() + len(match.group(1).rstrip())].strip()
-            if not candidate or not any(c.isalnum() for c in candidate):
-                continue
-            if is_abbreviation(candidate):
-                continue
-            if _ends_with_decimal(candidate):
-                continue
-            if len(candidate) >= self.min_chars:
-                self._buffer = buf[match.end():].lstrip()
-                return candidate
-            # Too short: keep waiting for more tokens (avoids "Hi." / "Ok."
-            # each costing a full Kokoro round-trip).
-            continue
 
         # 3. Fallback for long run-on sentences: split at , ; : em-dash.
         if len(buf) > self.max_chars:

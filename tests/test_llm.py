@@ -294,6 +294,25 @@ def test_stream_tokens_think_mode_and_tags() -> None:
     asyncio.run(_test())
 
 
+def test_sentence_buffer_multiple_sentences_before_newline() -> None:
+    """Verifies that multiple sentences in a single block before a newline are split correctly."""
+    from app.core.sentences import SentenceBuffer
+
+    buf = SentenceBuffer(min_chars=12, max_chars=160)
+    tokens = ["Mars is the fourth planet. It has two moons.\n"]
+    chunks = []
+    for t in tokens:
+        chunks.extend(buf.feed(t))
+    tail = buf.flush()
+    if tail:
+        chunks.append(tail)
+
+    assert len(chunks) == 2
+    assert chunks[0] == "Mars is the fourth planet."
+    assert chunks[1] == "It has two moons."
+
+
+
 
 
 

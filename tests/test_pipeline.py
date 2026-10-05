@@ -406,8 +406,51 @@ def test_pipeline_process_direct_tts_empty_raises() -> None:
         with pytest.raises(ValueError, match="Input text cannot be empty"):
             await pipeline.process_direct_tts(text="   ")
 
+def test_pipeline_process_direct_tts_multi_sentence() -> None:
+    """Verifies that process_direct_tts with multiple sentences streams sentence-by-sentence chunks."""
+    async def _test() -> None:
+        mock_stt = MagicMock()
+        mock_llm = MagicMock()
+        mock_tts = MagicMock()
+
+        sample_rate = 24000
+        test_waveform = np.zeros(sample_rate, dtype=np.float32)
+        mock_tts.sample_rate = sample_rate
+        mock_tts.speaker = "af_heart"
+        mock_tts.language = "a"
+        mock_tts.synthesize = MagicMock(return_value=(test_waveform, sample_rate))
+
+        pipeline = AssistantPipeline(
+            stt_engine=mock_stt,
+            llm_client=mock_llm,
+            tts_engine=mock_tts,
+        )
+
+        emitted_chunks = []
+        def _on_chunk(chunk):
+            emitted_chunks.append(chunk)
+
+        res = await pipeline.process_direct_tts(
+            text="First sentence here! Second sentence follows. Third sentence ends.",
+            speaker="af_heart",
+            play_audio=False,
+            on_chunk=_on_chunk,
+        )
+
+        assert len(emitted_chunks) == 3
+        assert emitted_chunks[0].text == "First sentence here!"
+        assert emitted_chunks[0].sentence_index == 0
+        assert emitted_chunks[0].is_final is False
+
+        assert emitted_chunks[1].text == "Second sentence follows."
+        assert emitted_chunks[1].sentence_index == 1
+        assert emitted_chunks[1].is_final is False
+
+        assert emitted_chunks[2].text == "Third sentence ends."
+        assert emitted_chunks[2].sentence_index == 2
+        assert emitted_chunks[2].is_final is True
+
+        assert mock_tts.synthesize.call_count == 3
+        assert len(res.audio_bytes) > 0
+
     asyncio.run(_test())
-
-
-
-

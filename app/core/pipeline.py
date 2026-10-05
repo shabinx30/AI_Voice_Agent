@@ -890,50 +890,90 @@ class AssistantPipeline:
         if not cleaned.strip():
             cleaned = text.strip()
 
-        audio_data, sr = await asyncio.to_thread(
-            self.tts.synthesize,
-            cleaned,
-            speaker=target_speaker,
-            language=target_lang,
+        # Split into sentence chunks for low-latency sequential streaming synthesis
+        buf = SentenceBuffer(
+            min_chars=int(getattr(settings, "sentence_min_chars", 12)),
+            max_chars=int(getattr(settings, "sentence_max_chars", 160)),
         )
+        sentences: List[str] = buf.feed(cleaned + "\n")
+        tail = buf.flush()
+        if tail and (not sentences or tail != sentences[-1]):
+            sentences.append(tail)
+        if not sentences:
+            sentences = [cleaned]
 
-        tts_wall_ms = round((time.perf_counter() - pipeline_start) * 1000.0, 2)
-        wav_bytes = AudioProcessor.to_wav_bytes(audio_data, sr)
-
-        chunk = AssistantStreamChunk(
-            sentence_index=0,
-            text=cleaned,
-            audio_bytes=wav_bytes,
-            sample_rate=sr,
-            is_final=True,
-        )
-        if on_chunk is not None:
-            await self._emit_chunk(on_chunk, chunk)
+        all_waveforms: List[np.ndarray] = []
+        all_sr: int = getattr(self.tts, "sample_rate", 24000)
+        ttfa_ms: float = 0.0
 
         should_play = play_audio if play_audio is not None else settings.auto_play_audio
-        if should_play and len(audio_data) > 0:
+        stream_player = None
+        if should_play:
             prev_player = self._players.pop(session_id, None)
             if prev_player is not None:
                 try:
                     prev_player.stop()
                 except Exception:
                     pass
-            stream_player = AudioProcessor.create_stream_player(max_queue=2)
+            stream_player = AudioProcessor.create_stream_player(max_queue=max(2, len(sentences) + 2))
             self._players[session_id] = stream_player
-            stream_player.enqueue(audio_data)
-            stream_player.finish(wait=False)
 
-        duration_sec = len(audio_data) / sr if sr > 0 else 0.0
+        for idx, sent in enumerate(sentences):
+            audio_data, sr = await asyncio.to_thread(
+                self.tts.synthesize,
+                sent,
+                speaker=target_speaker,
+                language=target_lang,
+            )
+            all_sr = sr
+            if ttfa_ms == 0.0:
+                ttfa_ms = round((time.perf_counter() - pipeline_start) * 1000.0, 2)
+
+            chunk_wav = AudioProcessor.to_wav_bytes(audio_data, sr) if len(audio_data) > 0 else b""
+            if len(audio_data) > 0:
+                all_waveforms.append(audio_data)
+                if should_play and stream_player is not None:
+                    try:
+                        stream_player.play_chunk(audio_data, sr)
+                    except Exception as play_exc:
+                        logger.warning("Direct TTS playback enqueue warning: %s", play_exc)
+
+            is_final = (idx == len(sentences) - 1)
+            chunk = AssistantStreamChunk(
+                sentence_index=idx,
+                text=sent,
+                audio_bytes=chunk_wav,
+                sample_rate=sr,
+                is_final=is_final,
+            )
+            if on_chunk is not None:
+                await self._emit_chunk(on_chunk, chunk)
+
+        if should_play and stream_player is not None:
+            try:
+                stream_player.finish(wait=False)
+            except Exception:
+                pass
+
+        tts_wall_ms = round((time.perf_counter() - pipeline_start) * 1000.0, 2)
+        if all_waveforms:
+            combined = np.concatenate(all_waveforms, axis=0).astype(np.float32)
+            wav_bytes = AudioProcessor.to_wav_bytes(combined, all_sr)
+        else:
+            wav_bytes = b""
+
+        total_audio_len = sum(len(w) for w in all_waveforms)
+        duration_sec = total_audio_len / all_sr if all_sr > 0 else 0.0
         rtf = round(duration_sec / max(tts_wall_ms / 1000.0, 0.001), 2)
         metrics = PipelineMetrics(
             stt_latency_ms=0.0,
             llm_latency_ms=0.0,
             tts_latency_ms=tts_wall_ms,
             tts_synth_ms=tts_wall_ms,
-            ttfa_ms=tts_wall_ms,
+            ttfa_ms=ttfa_ms if ttfa_ms > 0.0 else tts_wall_ms,
             total_latency_ms=tts_wall_ms,
             tts_realtime_factor=rtf,
-            voice_latency_ms=tts_wall_ms,
+            voice_latency_ms=ttfa_ms if ttfa_ms > 0.0 else tts_wall_ms,
         )
         self.last_metrics = metrics
 
@@ -941,7 +981,7 @@ class AssistantPipeline:
             user_text=text,
             assistant_text=cleaned,
             audio_bytes=wav_bytes,
-            sample_rate=sr,
+            sample_rate=all_sr,
             metrics=metrics,
         )
 

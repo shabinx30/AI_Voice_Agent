@@ -66,8 +66,16 @@ export function Dock({
       .padStart(2, "0")}`;
   };
 
-  // Canvas visualizer animation loop
+  // Canvas visualizer animation loop - runs ONLY when microphone is recording
   useEffect(() => {
+    if (!isRecording) {
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+      return;
+    }
+
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -76,12 +84,23 @@ export function Dock({
     let localAnimId: number;
 
     const render = () => {
+      // Ensure canvas resolution matches element size for crisp rendering
+      const rect = canvas.getBoundingClientRect();
+      if (
+        rect.width > 0 &&
+        (canvas.width !== Math.floor(rect.width) ||
+          canvas.height !== Math.floor(rect.height))
+      ) {
+        canvas.width = Math.floor(rect.width);
+        canvas.height = Math.floor(rect.height);
+      }
+
       const width = canvas.width;
       const height = canvas.height;
 
       ctx.clearRect(0, 0, width, height);
 
-      if (isRecording && analyserNode) {
+      if (analyserNode) {
         // Live audio waveform from microphone - preserved red
         const bufferLength = analyserNode.frequencyBinCount;
         const dataArray = new Uint8Array(bufferLength);
@@ -105,21 +124,12 @@ export function Dock({
         ctx.lineTo(width, height / 2);
         ctx.stroke();
       } else {
-        // Idle gentle harmonic sine wave - monochrome
+        // Microphone active but analyser initializing: clean flat line
         ctx.lineWidth = 2;
-        ctx.strokeStyle = "rgba(0, 0, 0, 0.35)";
+        ctx.strokeStyle = "#dc2626";
         ctx.beginPath();
-
-        const sliceWidth = width / 60;
-        let x = 0;
-        const time = Date.now() * 0.003;
-
-        for (let i = 0; i < 60; i++) {
-          const y = height / 2 + Math.sin(i * 0.2 + time) * 4;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-          x += sliceWidth;
-        }
+        ctx.moveTo(0, height / 2);
+        ctx.lineTo(width, height / 2);
         ctx.stroke();
       }
 
@@ -155,22 +165,23 @@ export function Dock({
 
   return (
     <footer className="glass-panel shrink-0 p-4 md:p-5 flex flex-col gap-3 shadow-xs bg-white border border-neutral-200">
-      {/* Audio Waveform & Timer Wrapper */}
-      <div className="flex items-center justify-between w-full h-11 bg-neutral-50 rounded-xl px-4 border border-neutral-200">
-        <canvas
-          ref={canvasRef}
-          width={650}
-          height={44}
-          className="flex-1 h-full w-full max-w-full"
-        />
+      {/* Audio Waveform & Timer Wrapper - Rendered only when using the microphone */}
+      {isRecording && (
+        <div className="flex items-center justify-between w-full h-11 bg-neutral-50 rounded-xl px-4 border border-neutral-200 animate-wave-appear">
+          <canvas
+            ref={canvasRef}
+            width={650}
+            height={44}
+            className="flex-1 h-full w-full max-w-full"
+          />
 
-        {isRecording && (
           <div className="font-mono text-xs text-rose-700 font-semibold ml-3 flex items-center gap-1.5 shrink-0 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
             <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse" />
             {formatTime(recordingSeconds)}
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
 
       {/* Mode Selector & Controls Row */}
       <div className="flex items-center justify-between px-1 text-xs gap-2">

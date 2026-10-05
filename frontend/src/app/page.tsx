@@ -111,6 +111,13 @@ export default function NexusVoiceApp() {
     const unsubscribe = queue.onStateChange((state) => {
       setIsAudioPlaying(state.isPlaying);
       setIsAudioPaused(state.isPaused);
+      if (!state.isPlaying && !state.isPaused) {
+        setStatusText((prev) =>
+          prev.startsWith("Speaking sentence")
+            ? "All Pipelines Active • Ready for Voice Input"
+            : prev
+        );
+      }
     });
 
     return () => {
@@ -704,6 +711,11 @@ export default function NexusVoiceApp() {
     [playHostAudio]
   );
 
+  const handleWebSocketMessageRef = useRef(handleWebSocketMessage);
+  useEffect(() => {
+    handleWebSocketMessageRef.current = handleWebSocketMessage;
+  }, [handleWebSocketMessage]);
+
   // Initialize WebSocket connection
   const initWebSocket = useCallback(() => {
     if (
@@ -730,7 +742,7 @@ export default function NexusVoiceApp() {
       ws.onmessage = (event) => {
         try {
           const data: WSInboundMessage = JSON.parse(event.data);
-          handleWebSocketMessage(data);
+          handleWebSocketMessageRef.current(data);
         } catch (err) {
           console.error("WebSocket message JSON parse error:", err);
         }
@@ -1172,6 +1184,7 @@ export default function NexusVoiceApp() {
     setStreamingThoughtBuffer("");
     setIsThinking(false);
 
+    audioQueueRef.current?.getAudioContext();
     audioQueueRef.current?.reset();
 
     const userMsgId = `user-${Date.now()}`;
@@ -1224,6 +1237,7 @@ export default function NexusVoiceApp() {
     streamingTokenBufferRef.current = "";
     setStreamingTokenBuffer("");
 
+    audioQueueRef.current?.getAudioContext();
     audioQueueRef.current?.reset();
 
     const userMsgId = `tts-user-${Date.now()}`;
