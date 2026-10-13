@@ -29,12 +29,16 @@ function ThinkingAccordion({
   defaultOpen?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState<boolean>(defaultOpen ?? Boolean(isLive));
+  const prevIsLiveRef = useRef<boolean>(Boolean(isLive));
 
-  // Automatically open when reasoning is actively streaming
+  // Automatically expand while reasoning is streaming; collapse once reasoning is completed
   useEffect(() => {
-    if (isLive) {
+    if (isLive && !prevIsLiveRef.current) {
       setIsOpen(true);
+    } else if (!isLive && prevIsLiveRef.current) {
+      setIsOpen(false);
     }
+    prevIsLiveRef.current = Boolean(isLive);
   }, [isLive]);
 
   const wordCount = thought.trim() ? thought.trim().split(/\s+/).length : 0;

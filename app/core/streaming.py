@@ -460,7 +460,12 @@ async def run_streaming_pipeline(
         return partial, b"", state["tts_sr"], metrics
 
     if not ordered_texts:
-        fallback_text = "I didn't receive a response. Please try again."
+        if thought_tokens:
+            fallback_text = (
+                "I reached the token limit while thinking. Please try asking again or disable think mode."
+            )
+        else:
+            fallback_text = "I didn't receive a response. Please try again."
         try:
             audio_data, sr = await asyncio.to_thread(
                 pipeline.tts.synthesize, text=fallback_text,
@@ -473,6 +478,30 @@ async def run_streaming_pipeline(
             metrics.ttfa_ms = round((time.perf_counter() - pipeline_start) * 1000, 2)
         if tracker.stages.t8_speaker_start == 0.0:
             tracker.mark("t8_speaker_start")
+
+        # Emit chunk to WebSocket and host player so TTS audio plays on fallback
+        if on_chunk is not None and len(audio_data) > 0:
+            try:
+                from app.core.pipeline import AssistantStreamChunk as _Chunk
+                chunk_wav = AudioProcessor.to_wav_bytes(audio_data, sr)
+                await pipeline._emit_chunk(
+                    on_chunk,
+                    _Chunk(
+                        sentence_index=0,
+                        text=fallback_text,
+                        audio_bytes=chunk_wav,
+                        sample_rate=sr,
+                        is_final=True,
+                    ),
+                )
+            except Exception as emit_err:
+                logger.warning("Failed to emit fallback audio chunk: %s", emit_err)
+
+        if should_play and stream_player is not None and len(audio_data) > 0:
+            try:
+                stream_player.play_chunk(audio_data, sr)
+            except Exception as play_err:
+                logger.warning("Failed to play fallback audio chunk: %s", play_err)
 
     # Assistant text preserves readable order, paragraph breaks, and formatting from the LLM.
     full_text = "".join(raw_tokens).strip()

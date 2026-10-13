@@ -49,6 +49,8 @@ _DECIMAL_TAIL_RE = re.compile(r"\d\.\d$")
 _SENT_END_RE = re.compile(r'([.!?]+["\')\]]*\s+)')
 
 # Markdown / noise patterns stripped before TTS.
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+_UNCLOSED_THINK_RE = re.compile(r"<think>.*", re.DOTALL)
 _CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`([^`]*)`")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
@@ -131,7 +133,9 @@ def clean_text_for_speech(text: str) -> str:
     """
     if not text:
         return ""
-    cleaned = _CODE_BLOCK_RE.sub(" ", text)
+    cleaned = _THINK_BLOCK_RE.sub(" ", text)
+    cleaned = _UNCLOSED_THINK_RE.sub(" ", cleaned)
+    cleaned = _CODE_BLOCK_RE.sub(" ", cleaned)
     cleaned = _MD_LINK_RE.sub(r"\1", cleaned)
     cleaned = _URL_RE.sub(" ", cleaned)
     cleaned = _HTML_TAG_RE.sub(" ", cleaned)

@@ -454,3 +454,52 @@ def test_pipeline_process_direct_tts_multi_sentence() -> None:
         assert len(res.audio_bytes) > 0
 
     asyncio.run(_test())
+
+
+def test_pipeline_fallback_emits_chunk_when_only_thoughts_produced() -> None:
+    """Verifies that when LLM produces only thought tokens and stops, a fallback chunk with audio is emitted."""
+    async def _test() -> None:
+        mock_stt = MagicMock()
+        mock_llm = MagicMock()
+        mock_tts = MagicMock()
+
+        sample_rate = 24000
+        test_waveform = np.ones(sample_rate // 2, dtype=np.float32)
+        mock_tts.sample_rate = sample_rate
+        mock_tts.speaker = "af_heart"
+        mock_tts.language = "a"
+        mock_tts.synthesize = MagicMock(return_value=(test_waveform, sample_rate))
+
+        async def fake_thought_stream(*args, **kwargs):
+            yield ("thought", "I am thinking deeply about this problem.")
+
+        mock_llm.stream_tokens = fake_thought_stream
+
+        pipeline = AssistantPipeline(
+            stt_engine=mock_stt,
+            llm_client=mock_llm,
+            tts_engine=mock_tts,
+        )
+
+        emitted_chunks = []
+        def _on_chunk(chunk):
+            emitted_chunks.append(chunk)
+
+        res = await pipeline.process_text_prompt(
+            prompt="Tell me about quantum physics",
+            speaker="af_heart",
+            play_audio=False,
+            on_chunk=_on_chunk,
+            think_mode=True,
+        )
+
+        assert res.assistant_thought == "I am thinking deeply about this problem."
+        assert "token limit" in res.assistant_text.lower() or "thinking" in res.assistant_text.lower()
+        assert len(emitted_chunks) == 1
+        assert emitted_chunks[0].sentence_index == 0
+        assert emitted_chunks[0].is_final is True
+        assert len(emitted_chunks[0].audio_bytes) > 0
+        assert len(res.audio_bytes) > 0
+
+    asyncio.run(_test())
+

@@ -88,16 +88,17 @@ class Settings(BaseSettings):
         description="Nucleus sampling cutoff for LLM generation",
     )
     lm_studio_max_tokens: int = Field(
-        default=2048,
+        default=8192,
         ge=-1,
-        le=16384,
+        le=32768,
         description="Max output tokens for the LLM (-1 or 0 for model default / uncapped)",
     )
     lm_studio_system_prompt: str = Field(
         default=(
-            "You are a helpful, intelligent voice assistant. Speak naturally in conversational speech. "
-            "Provide clear, thorough, and engaging answers. Avoid raw markdown formatting, code blocks, or symbols "
-            "that sound unnatural when read aloud."
+            "You are a helpful, conversational voice assistant. Give clear, direct, and concise answers "
+            "suitable for spoken speech. Speak in natural plain sentences without markdown, bullet points, "
+            "headers, or code blocks. When thinking or reasoning, keep your thought process brief and directly "
+            "focused on answering the question."
         ),
         description="Default system instruction for the LLM",
     )

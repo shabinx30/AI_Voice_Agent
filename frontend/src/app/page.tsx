@@ -587,6 +587,7 @@ export default function NexusVoiceApp() {
       if (msg.type === "thought") {
         setIsStreaming(true);
         setIsThinking(true);
+        setStatusText("Thinking • Reasoning before response...");
         const thoughtDelta = msg.text || "";
         streamingThoughtBufferRef.current += thoughtDelta;
         setStreamingThoughtBuffer((prev) => prev + thoughtDelta);
@@ -596,6 +597,7 @@ export default function NexusVoiceApp() {
       if (msg.type === "token") {
         setIsStreaming(true);
         setIsThinking(false);
+        setStatusText("Generating response...");
         streamingTokenBufferRef.current += (msg.text || "");
         setStreamingTokenBuffer((prev) => prev + (msg.text || ""));
         return;

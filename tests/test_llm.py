@@ -312,6 +312,54 @@ def test_sentence_buffer_multiple_sentences_before_newline() -> None:
     assert chunks[1] == "It has two moons."
 
 
+def test_clean_text_for_speech_strips_think_tags() -> None:
+    """Verifies clean_text_for_speech strips closed and unclosed think blocks so TTS never speaks thinking tokens."""
+    from app.core.sentences import clean_text_for_speech
+
+    # Closed think tag
+    text1 = "<think>Let me analyze this question carefully.</think>Hello, how can I help you today?"
+    assert clean_text_for_speech(text1) == "Hello, how can I help you today?"
+
+    # Unclosed think tag
+    text2 = "<think>Still pondering something here..."
+    assert clean_text_for_speech(text2) == ""
+
+
+def test_stream_tokens_max_tokens_boost_on_think_mode() -> None:
+    """Verifies that think_mode boosts small max_tokens so reasoning doesn't starve completion."""
+    async def _test() -> None:
+        client = LMStudioClient()
+        client.max_tokens = 2048
+
+        captured_payload = {}
+        class DummyStreamResponse:
+            def raise_for_status(self): pass
+            async def aiter_lines(self):
+                yield 'data: {"choices":[{"delta":{"content":"Hi"}}]}'
+                yield 'data: [DONE]'
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): pass
+
+        class DummyHttpClient:
+            def stream(self, method, url, **kwargs):
+                nonlocal captured_payload
+                captured_payload = kwargs.get("json", {})
+                return DummyStreamResponse()
+
+        client._http_client = DummyHttpClient()
+
+        # With think_mode=True, 2048 should be boosted to 8192
+        [t async for t in client.stream_tokens("Hi", think_mode=True)]
+        assert captured_payload["max_tokens"] == 8192
+
+        # With think_mode=False, keeps 2048
+        [t async for t in client.stream_tokens("Hi", think_mode=False)]
+        assert captured_payload["max_tokens"] == 2048
+
+    asyncio.run(_test())
+
+
+
 
 
 

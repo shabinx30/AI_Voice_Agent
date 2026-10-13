@@ -708,7 +708,10 @@ class LMStudioClient:
             payload["reasoning_effort"] = "none"
 
         if self.max_tokens and self.max_tokens > 0:
-            payload["max_tokens"] = self.max_tokens
+            if effective_think and self.max_tokens < 4096:
+                payload["max_tokens"] = 8192
+            else:
+                payload["max_tokens"] = self.max_tokens
 
         logger.debug("Dispatching LLM prompt to %s/chat/completions", self.base_url)
         start_time = time.perf_counter()
@@ -817,7 +820,10 @@ class LMStudioClient:
             payload["reasoning_effort"] = "none"
 
         if self.max_tokens and self.max_tokens > 0:
-            payload["max_tokens"] = self.max_tokens
+            if effective_think and self.max_tokens < 4096:
+                payload["max_tokens"] = 8192
+            else:
+                payload["max_tokens"] = self.max_tokens
 
         inside_think_tag = False
         tag_buffer = ""
